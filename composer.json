@@ -1,0 +1,56 @@
+{
+    "name": "restlytics/laravel",
+    "description": "restlytics Laravel SDK — zero-config request, DB, HTTP and cache tracing shipped to restlytics in OTLP/JSON. Pure PHP, fire-and-forget, no PECL extension required.",
+    "keywords": ["laravel", "observability", "tracing", "otlp", "apm", "performance", "n+1", "restlytics"],
+    "homepage": "https://github.com/restlytics/restlytics-laravel",
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "restlytics",
+            "homepage": "https://restlytics.com"
+        }
+    ],
+    "require": {
+        "php": "^8.2",
+        "ext-curl": "*",
+        "ext-json": "*",
+        "ext-zlib": "*",
+        "illuminate/support": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/http": "^10.0 || ^11.0 || ^12.0",
+        "illuminate/database": "^10.0 || ^11.0 || ^12.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0 || ^9.0 || ^10.0",
+        "phpunit/phpunit": "^10.0 || ^11.0",
+        "laravel/pint": "^1.13",
+        "larastan/larastan": "^2.9 || ^3.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Restlytics\\Laravel\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Restlytics\\Laravel\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Restlytics\\Laravel\\RestlyticsServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "pint --test",
+        "fmt": "pint",
+        "analyse": "phpstan analyse"
+    },
+    "config": {
+        "sort-packages": true
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}

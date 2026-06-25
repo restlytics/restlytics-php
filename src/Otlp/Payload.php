@@ -24,7 +24,7 @@ final class Payload
     /** Stable identifiers for the SDK, surfaced as resource attributes and the scope name. */
     public const SDK_NAME = 'restlytics-laravel';
     public const SDK_LANGUAGE = 'php';
-    public const SDK_VERSION = '0.1.0';
+    public const SDK_VERSION = '0.1.2';
 
     /**
      * @param list<Span> $spans

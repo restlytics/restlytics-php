@@ -7,8 +7,7 @@ Zero-config performance + error tracing for Laravel, shipped to [restlytics](htt
 - **Zero added latency** — spans are flushed *after* the HTTP response is sent (terminable middleware + `fastcgi_finish_request`), fire-and-forget over cURL with a hard timeout.
 - **Safe by default** — head-based sampling, SQL normalized to literal-free templates, bindings never sent, query strings scrubbed, no request/response bodies.
 
-> This package is **mirrored from the restlytics monorepo** (`sdks/laravel/`) out to the public
-> `restlytics-laravel` repo. Open issues/PRs against the public repo; changes are synced back.
+> **This is the canonical, open-source repository for the restlytics Laravel SDK** — published to Packagist as `restlytics/laravel`. Open issues and pull requests here. It conforms to the cross-language restlytics wire contract, so the ingestion service accepts it identically to every other restlytics SDK.
 
 ---
 

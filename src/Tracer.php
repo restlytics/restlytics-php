@@ -102,8 +102,11 @@ final class Tracer
         if ($incoming !== null) {
             $this->traceId = $incoming['traceId'];
             $this->rootParentSpanId = $incoming['parentSpanId'];
-            // Respect an upstream "not sampled" decision; only re-roll if it was sampled.
-            $this->sampled = $incoming['sampled'] && $this->sampleDecision($this->traceId);
+            // Inherit the upstream sampled bit EXACTLY — the decision belongs to the
+            // head of the trace, not to us. Re-rolling it here would let this service
+            // drop a trace its caller chose to keep, severing the distributed trace
+            // mid-chain for every request whenever sample_rate < 1.0.
+            $this->sampled = $incoming['sampled'];
         } else {
             $this->traceId = Ids::traceId();
             $this->rootParentSpanId = null;

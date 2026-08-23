@@ -42,7 +42,7 @@ php artisan vendor:publish --tag=restlytics-config
 | `RESTLYTICS_ENV` | `APP_ENV` | `deployment.environment` resource attribute. |
 | `RESTLYTICS_SERVICE_NAME` | `APP_NAME` | `service.name` resource attribute. |
 | `RESTLYTICS_SAMPLE_RATE` | `1.0` | Head-based trace sampling, `0.0`–`1.0`. |
-| `RESTLYTICS_TRANSPORT` | `curl` | `curl` (prod), `log` (dev), `null` (off/tests). |
+| `RESTLYTICS_TRANSPORT` | `curl` | `curl` (prod), `preview` (local structured report), `log` (raw dev payload), `null` (off/tests). |
 | `RESTLYTICS_TIMEOUT_MS` | `2000` | Hard cap on the send. |
 | `RESTLYTICS_CAPTURE_SQL` | `false` | Send raw SQL text (capped 2048). Off = template only. |
 | `RESTLYTICS_INSTRUMENT_DB` / `_HTTP` / `_CACHE` | `true` | Per-instrument toggles. |
@@ -109,8 +109,12 @@ if ($transport instanceof \Restlytics\Laravel\Transport\CurlTransport) {
 
 ## Local development
 
-Set `RESTLYTICS_TRANSPORT=log` to dump the OTLP payload to your Laravel log instead of the network,
-or `RESTLYTICS_TRANSPORT=null` to disable delivery while keeping instrumentation (useful in tests).
+Before connecting production data, set `RESTLYTICS_TRANSPORT=preview` and drive one
+representative request. It needs no ingest key, never opens a socket, and logs a
+structured report with `networkRequestMade: false`, the post-redaction production
+payload, configured sampling rate, span count, and JSON/gzip byte sizes. Set
+`RESTLYTICS_SAMPLE_RATE=1` for a deterministic review. Use `log` for the raw OTLP
+payload or `null` to disable delivery while keeping instrumentation in tests.
 
 ## Cross-language conformance
 

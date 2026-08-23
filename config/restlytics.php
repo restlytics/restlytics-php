@@ -46,6 +46,7 @@ return [
     | Transport
     |--------------------------------------------------------------------------
     | curl  — default; gzip + fire-and-forget POST after the response is flushed.
+    | preview — structured local report; never networks and needs no ingest key.
     | log   — write the OTLP payload to the Laravel log (local debugging).
     | null  — no-op (tests / disabling delivery while keeping instrumentation).
     */

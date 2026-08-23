@@ -17,6 +17,7 @@ use Restlytics\Laravel\Support\Sql;
 use Restlytics\Laravel\Transport\CurlTransport;
 use Restlytics\Laravel\Transport\LogTransport;
 use Restlytics\Laravel\Transport\NullTransport;
+use Restlytics\Laravel\Transport\PreviewTransport;
 use Restlytics\Laravel\Transport\Transport;
 
 /**
@@ -73,7 +74,8 @@ final class RestlyticsServiceProvider extends ServiceProvider
 
     private function enabled(): bool
     {
-        return (string) $this->app['config']->get('restlytics.key', '') !== '';
+        return (string) $this->app['config']->get('restlytics.key', '') !== ''
+            || (string) $this->app['config']->get('restlytics.transport', '') === 'preview';
     }
 
     /**
@@ -286,6 +288,14 @@ final class RestlyticsServiceProvider extends ServiceProvider
                     $app->make('log')->debug('restlytics payload', ['otlp' => $json]);
                 }
             }),
+            'preview' => new PreviewTransport(
+                sampleRate: (float) $config->get('restlytics.sample_rate', 1.0),
+                writer: static function (string $json) use ($app): void {
+                    if ($app->bound('log')) {
+                        $app->make('log')->debug('restlytics telemetry preview', ['report' => $json]);
+                    }
+                },
+            ),
             default => new CurlTransport(
                 ingestUrl: (string) $config->get('restlytics.ingest_url', ''),
                 key: (string) $config->get('restlytics.key', ''),

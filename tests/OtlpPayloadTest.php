@@ -122,7 +122,10 @@ final class OtlpPayloadTest extends TestCase
         $this->assertSame(['stringValue' => 'production'], $resourceAttrs['deployment.environment']);
         $this->assertSame(['stringValue' => 'restlytics-laravel'], $resourceAttrs['telemetry.sdk.name']);
         $this->assertSame(['stringValue' => 'php'], $resourceAttrs['telemetry.sdk.language']);
-        $this->assertSame(['stringValue' => '0.1.0'], $resourceAttrs['telemetry.sdk.version']);
+        $this->assertSame(
+            ['stringValue' => Payload::SDK_VERSION],
+            $resourceAttrs['telemetry.sdk.version'],
+        );
 
         $this->assertSame('restlytics-laravel', $rs['scopeSpans'][0]['scope']['name']);
         $this->assertCount(1, $rs['scopeSpans'][0]['spans']);

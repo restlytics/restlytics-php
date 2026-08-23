@@ -86,9 +86,9 @@ restlytics is built to be safe to run in production against real traffic:
   throw into — or slow — your app. A slow/unreachable ingest endpoint is bounded by a short timeout.
 - **No binding values.** SQL is normalized to a template; only a binding *count* is sent.
 - **No raw SQL** unless you explicitly set `RESTLYTICS_CAPTURE_SQL=true` (then capped at 2048 chars).
-- **Scrubbed URLs.** `url.full` query strings have sensitive keys (token, password, secret, …)
-  redacted. The `http.route` attribute is always the **template** (`/users/{id}`), never the raw URL.
-- **No bodies / headers.** Request and response bodies and headers are never captured.
+- **Scrubbed URLs.** Every `url.full` query value is redacted and credentials/fragments are removed.
+  The `http.route` attribute is always the **template** (`/users/{id}`), never the raw URL.
+- **No content-bearing fields.** Request/response bodies and headers plus exception content are never exported.
 - **Sampling.** Lower `RESTLYTICS_SAMPLE_RATE` to capture a fraction of traffic.
 
 ---
@@ -97,6 +97,13 @@ restlytics is built to be safe to run in production against real traffic:
 
 Set `RESTLYTICS_TRANSPORT=log` to dump the OTLP payload to your Laravel log instead of the network,
 or `RESTLYTICS_TRANSPORT=null` to disable delivery while keeping instrumentation (useful in tests).
+
+## Cross-language conformance
+
+CI pins [`restlytics/sdk-conformance@v1.1.0`](https://github.com/restlytics/sdk-conformance)
+and compares the vendored fixture before testing. The suite proves exact semantic OTLP output,
+W3C propagation, root sampling, source redaction, and error-status behavior shared by all seven SDKs.
+This is the wire-level gate; real Laravel application validation is tracked separately.
 
 ## License
 

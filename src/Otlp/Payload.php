@@ -23,11 +23,13 @@ final class Payload
 {
     /** Stable identifiers for the SDK, surfaced as resource attributes and the scope name. */
     public const SDK_NAME = 'restlytics-laravel';
+
     public const SDK_LANGUAGE = 'php';
+
     public const SDK_VERSION = '0.1.0';
 
     /**
-     * @param list<Span> $spans
+     * @param  list<Span>  $spans
      * @return array<string, mixed>
      */
     public static function build(string $serviceName, string $environment, array $spans): array
@@ -45,7 +47,10 @@ final class Payload
                     ],
                     'scopeSpans' => [
                         [
-                            'scope' => ['name' => self::SDK_NAME],
+                            'scope' => [
+                                'name' => self::SDK_NAME,
+                                'version' => self::SDK_VERSION,
+                            ],
                             'spans' => $otlpSpans,
                         ],
                     ],

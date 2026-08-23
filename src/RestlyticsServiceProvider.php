@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel;
 
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
@@ -11,6 +12,7 @@ use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\ServiceProvider;
 use Restlytics\Laravel\Middleware\RestlyticsMiddleware;
+use Restlytics\Laravel\Support\Redaction;
 use Restlytics\Laravel\Support\Sql;
 use Restlytics\Laravel\Transport\CurlTransport;
 use Restlytics\Laravel\Transport\LogTransport;
@@ -29,7 +31,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/restlytics.php', 'restlytics');
+        $this->mergeConfigFrom(__DIR__.'/../config/restlytics.php', 'restlytics');
 
         // Transport is a singleton; chosen by config('restlytics.transport').
         $this->app->singleton(Transport::class, function ($app): Transport {
@@ -54,7 +56,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
     {
         // Allow `php artisan vendor:publish --tag=restlytics-config`.
         $this->publishes([
-            __DIR__ . '/../config/restlytics.php' => $this->app->configPath('restlytics.php'),
+            __DIR__.'/../config/restlytics.php' => $this->app->configPath('restlytics.php'),
         ], 'restlytics-config');
 
         // Disabled (no key) → install nothing. The package stays inert and free.
@@ -142,7 +144,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
 
             // A short, human-readable span name from the leading SQL keyword.
             if (preg_match('/^\s*(\w+)/', $summary, $m) === 1) {
-                $span->setName('db ' . strtolower($m[1]));
+                $span->setName('db '.strtolower($m[1]));
             }
 
             if ($captureSql) {
@@ -196,7 +198,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 $startNs = $endNs - (int) round($totalSeconds * 1_000_000_000);
 
                 $host = $uri->getHost();
-                $span = $tracer->addChildSpan('http ' . $host, $startNs, $endNs);
+                $span = $tracer->addChildSpan('http '.$host, $startNs, $endNs);
                 if ($span === null) {
                     return $response;
                 }
@@ -204,7 +206,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 $request = $stats->getRequest();
                 $span
                     ->setString('http.request.method', $request->getMethod())
-                    ->setString('url.full', self::redactUrl((string) $uri, $redactKeys))
+                    ->setString('url.full', Redaction::url((string) $uri, $redactKeys))
                     ->setString('server.address', $host)
                     ->setInt('http.response.status_code', $response->getStatusCode())
                     ->setString('restlytics.category', 'http');
@@ -271,13 +273,13 @@ final class RestlyticsServiceProvider extends ServiceProvider
      * Build the configured transport. Resolves once (singleton); the heavy work
      * (cURL) is deferred to send() and the logger is resolved at call-time.
      */
-    private function makeTransport(\Illuminate\Contracts\Foundation\Application $app): Transport
+    private function makeTransport(Application $app): Transport
     {
         $config = $app['config'];
         $driver = (string) $config->get('restlytics.transport', 'curl');
 
         return match ($driver) {
-            'null', 'none' => new NullTransport(),
+            'null', 'none' => new NullTransport,
             'log' => new LogTransport(static function (string $json) use ($app): void {
                 // Resolve the logger lazily so we don't bind a stale instance.
                 if ($app->bound('log')) {
@@ -297,35 +299,5 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 },
             ),
         };
-    }
-
-    /**
-     * Strip sensitive keys from a URL's query string for url.full. Keeps the path
-     * and host (needed for grouping) but never leaks tokens/secrets.
-     *
-     * @param list<string> $redactKeys
-     */
-    private static function redactUrl(string $url, array $redactKeys): string
-    {
-        $parts = parse_url($url);
-        if ($parts === false || ! isset($parts['query'])) {
-            return $url;
-        }
-
-        parse_str($parts['query'], $params);
-        $lowerRedact = array_map('strtolower', $redactKeys);
-        foreach (array_keys($params) as $key) {
-            if (\in_array(strtolower((string) $key), $lowerRedact, true)) {
-                $params[$key] = 'REDACTED';
-            }
-        }
-
-        $scheme = isset($parts['scheme']) ? $parts['scheme'] . '://' : '';
-        $host = $parts['host'] ?? '';
-        $port = isset($parts['port']) ? ':' . $parts['port'] : '';
-        $path = $parts['path'] ?? '';
-        $query = $params !== [] ? '?' . http_build_query($params) : '';
-
-        return $scheme . $host . $port . $path . $query;
     }
 }

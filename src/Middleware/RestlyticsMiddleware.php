@@ -24,13 +24,12 @@ use Symfony\Component\HttpFoundation\Response;
 final class RestlyticsMiddleware
 {
     /**
-     * @param list<string> $ignorePaths request paths (glob-style) to skip entirely
+     * @param  list<string>  $ignorePaths  request paths (glob-style) to skip entirely
      */
     public function __construct(
         private readonly Tracer $tracer,
         private readonly array $ignorePaths = [],
-    ) {
-    }
+    ) {}
 
     public function handle(Request $request, Closure $next): Response
     {
@@ -45,7 +44,7 @@ final class RestlyticsMiddleware
 
         // Provisional name; the real http.route template isn't known until routing
         // has resolved, so we finalize the name + route attribute in terminate().
-        $this->tracer->startServerSpan($request->getMethod() . ' ' . $request->getPathInfo(), $traceparent);
+        $this->tracer->startServerSpan($request->getMethod().' '.$request->getPathInfo(), $traceparent);
 
         return $next($request);
     }
@@ -65,17 +64,17 @@ final class RestlyticsMiddleware
             }
 
             // http.route MUST be the TEMPLATE (e.g. /users/{id}), never the raw URL,
-            // so high-cardinality ids don't explode the grouping. Fall back to the
-            // path only if routing didn't resolve (404s, etc.).
+            // so high-cardinality ids don't explode the grouping. Unmatched paths
+            // use a constant wildcard because they may contain identifiers/tokens.
             $route = $request->route();
             $template = ($route !== null && method_exists($route, 'uri'))
-                ? '/' . ltrim($route->uri(), '/')
-                : $request->getPathInfo();
+                ? '/'.ltrim($route->uri(), '/')
+                : '/*';
 
             $method = $request->getMethod();
             $status = $response->getStatusCode();
 
-            $root->setName($method . ' ' . $template);
+            $root->setName($method.' '.$template);
             $root->setString('http.request.method', $method);
             $root->setString('http.route', $template);
             $root->setInt('http.response.status_code', $status);
@@ -84,7 +83,7 @@ final class RestlyticsMiddleware
             // exception handler elsewhere may already have set a richer message.
             if ($status >= 500) {
                 if ($root->statusCode() !== Span::STATUS_ERROR) {
-                    $root->setStatus(Span::STATUS_ERROR, 'HTTP ' . $status);
+                    $root->setStatus(Span::STATUS_ERROR, 'HTTP '.$status);
                 }
             } elseif ($root->statusCode() === Span::STATUS_UNSET) {
                 $root->setStatus(Span::STATUS_OK);
@@ -103,9 +102,9 @@ final class RestlyticsMiddleware
 
     private function shouldTrace(Request $request): bool
     {
-        $path = '/' . ltrim($request->getPathInfo(), '/');
+        $path = '/'.ltrim($request->getPathInfo(), '/');
         foreach ($this->ignorePaths as $pattern) {
-            $pattern = '/' . ltrim((string) $pattern, '/');
+            $pattern = '/'.ltrim((string) $pattern, '/');
             // Support trailing wildcards like /telescope* and exact matches.
             if ($pattern === $path || \fnmatch($pattern, $path)) {
                 return false;

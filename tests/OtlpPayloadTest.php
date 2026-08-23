@@ -96,10 +96,10 @@ final class OtlpPayloadTest extends TestCase
     public function test_error_status_code_is_two(): void
     {
         $span = new Span('a', 'b', null, 'x', Span::KIND_SERVER, 1, 2);
-        $span->setStatus(Span::STATUS_ERROR, 'boom');
+        $span->setStatus(Span::STATUS_ERROR, 'boom for alice@example.test password=hunter2');
         $out = $span->toOtlpArray();
         $this->assertSame(2, $out['status']['code']);
-        $this->assertSame('boom', $out['status']['message']);
+        $this->assertArrayNotHasKey('message', $out['status']);
     }
 
     public function test_payload_envelope_has_resource_and_scope(): void
@@ -134,7 +134,7 @@ final class OtlpPayloadTest extends TestCase
     }
 
     /**
-     * @param list<array{key: string, value: array<string, mixed>}> $attrs
+     * @param  list<array{key: string, value: array<string, mixed>}>  $attrs
      * @return array<string, array<string, mixed>>
      */
     private function attrMap(array $attrs): array

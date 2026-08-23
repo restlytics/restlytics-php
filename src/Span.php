@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel;
 
+use Restlytics\Laravel\Support\Redaction;
+
 /**
  * A single span, accumulated in-request and serialized to OTLP/JSON on flush.
  *
@@ -19,11 +21,14 @@ final class Span
 {
     /** OTLP SpanKind enum values we use. */
     public const KIND_SERVER = 2;
+
     public const KIND_CLIENT = 3;
 
     /** OTLP status codes. */
     public const STATUS_UNSET = 0;
+
     public const STATUS_OK = 1;
+
     public const STATUS_ERROR = 2;
 
     /** @var array<string, scalar> raw attribute values (key => php scalar) */
@@ -38,6 +43,7 @@ final class Span
     private array $intKeys = [];
 
     private int $statusCode = self::STATUS_UNSET;
+
     private ?string $statusMessage = null;
 
     public function __construct(
@@ -48,8 +54,7 @@ final class Span
         public readonly int $kind,
         public readonly int $startUnixNano,
         public int $endUnixNano,
-    ) {
-    }
+    ) {}
 
     public function setName(string $name): self
     {
@@ -67,7 +72,10 @@ final class Span
 
     public function setString(string $key, string $value): self
     {
-        $this->attributes[$key] = $value;
+        if (Redaction::isSensitiveAttributeKey($key)) {
+            return $this;
+        }
+        $this->attributes[$key] = strtolower($key) === 'url.full' ? Redaction::url($value) : $value;
 
         return $this;
     }
@@ -75,6 +83,9 @@ final class Span
     /** Record an int attribute. Serialized as intValue (a STRING) per the contract. */
     public function setInt(string $key, int $value): self
     {
+        if (Redaction::isSensitiveAttributeKey($key)) {
+            return $this;
+        }
         $this->attributes[$key] = $value;
         $this->intKeys[$key] = true;
 
@@ -83,6 +94,9 @@ final class Span
 
     public function setDouble(string $key, float $value): self
     {
+        if (Redaction::isSensitiveAttributeKey($key)) {
+            return $this;
+        }
         $this->attributes[$key] = $value;
 
         return $this;
@@ -90,6 +104,9 @@ final class Span
 
     public function setBool(string $key, bool $value): self
     {
+        if (Redaction::isSensitiveAttributeKey($key)) {
+            return $this;
+        }
         $this->attributes[$key] = $value;
 
         return $this;
@@ -98,10 +115,7 @@ final class Span
     public function setStatus(int $code, ?string $message = null): self
     {
         $this->statusCode = $code;
-        if ($message !== null) {
-            // Cap to keep payloads bounded; full stack traces don't belong on the wire.
-            $this->statusMessage = mb_substr($message, 0, 1024);
-        }
+        $this->statusMessage = Redaction::exceptionMessage($message);
 
         return $this;
     }
@@ -171,7 +185,7 @@ final class Span
     /**
      * Wrap a PHP scalar in the OTLP AnyValue shape.
      *
-     * @param scalar $value
+     * @param  scalar  $value
      * @return array<string, mixed>
      */
     private function anyValue(string $key, mixed $value): array

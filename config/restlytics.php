@@ -104,10 +104,10 @@ return [
     |--------------------------------------------------------------------------
     | Redaction
     |--------------------------------------------------------------------------
-    | url.full (outbound HTTP) has its query string scrubbed of these keys, and
-    | these query keys are dropped wholesale. Request/response bodies are never
-    | captured. Bindings are never captured. This is belt-and-suspenders on top
-    | of the always-on SQL normalization.
+    | url.full (outbound HTTP) has every query value scrubbed; this list remains
+    | for backwards-compatible configuration. Request/response bodies, headers,
+    | logs, exception content and binding values are never captured. This is
+    | belt-and-suspenders on top of always-on SQL normalization.
     */
     'redaction' => [
         'query_keys' => ['token', 'api_key', 'apikey', 'password', 'secret', 'access_token', 'key', 'signature'],

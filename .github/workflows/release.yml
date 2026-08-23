@@ -44,6 +44,13 @@ jobs:
           # No PR context on a manual run; fall back to the dispatched ref.
           ref: ${{ github.event.pull_request.base.ref || github.ref }}
 
+      - name: Set up PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, json, zlib
+          coverage: none
+
       - name: Determine bump level
         id: bump
         env:
@@ -56,9 +63,9 @@ jobs:
           if [ "$EVENT" = workflow_dispatch ]; then
             # Manual run: the level comes from the dispatch input, not a PR label.
             level="$INPUT_LEVEL"
-          elif printf '%s' "$LABELS" | grep -q '"semver:major"'; then level=major
-          elif printf '%s' "$LABELS" | grep -q '"semver:minor"'; then level=minor
-          elif printf '%s' "$LABELS" | grep -q '"semver:patch"'; then level=patch
+          elif printf '%s' "$LABELS" | grep -q '"semver:major"'; then level="major"
+          elif printf '%s' "$LABELS" | grep -q '"semver:minor"'; then level="minor"
+          elif printf '%s' "$LABELS" | grep -q '"semver:patch"'; then level="patch"
           fi
           if [ -z "$level" ]; then
             echo "No semver:* label on the merged PR; skipping release."
@@ -98,6 +105,14 @@ jobs:
           # Composer/Packagist versions come from git tags; bump the emitted SDK version constant.
           sed -i -E "s/SDK_VERSION = '[^']*'/SDK_VERSION = '$VERSION'/" src/Otlp/Payload.php
 
+      - name: Validate the release candidate
+        if: steps.bump.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          composer validate --strict
+          composer install --prefer-dist --no-interaction --no-progress
+          composer test
+
       - name: Tag and release
         if: steps.bump.outputs.skip != 'true'
         env:
@@ -112,5 +127,18 @@ jobs:
             git commit -am "chore(release): ${TAG}"
           fi
           git tag -a "${TAG}" -m "${TAG}"
+
+          version="${TAG#v}"
+          smoke_dir="$(mktemp -d)"
+          cd "${smoke_dir}"
+          composer init --name=restlytics/release-smoke --no-interaction
+          composer config repositories.restlytics vcs "${GITHUB_WORKSPACE}"
+          composer require "restlytics/laravel:${version}" --prefer-dist --no-interaction --no-progress
+          cd "${GITHUB_WORKSPACE}"
+
+          mkdir -p release-dist
+          git archive --format=zip --prefix="restlytics-laravel-${version}/" \
+            --output="release-dist/restlytics-laravel-${version}.zip" HEAD
           git push origin "${TAG}"
-          gh release create "${TAG}" --title "${TAG}" --generate-notes
+          gh release create "${TAG}" "release-dist/restlytics-laravel-${version}.zip" \
+            --title "${TAG}" --generate-notes

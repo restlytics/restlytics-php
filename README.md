@@ -84,12 +84,26 @@ restlytics is built to be safe to run in production against real traffic:
 
 - **Fire-and-forget, never fatal.** Every transport/instrument path is wrapped; telemetry can never
   throw into — or slow — your app. A slow/unreachable ingest endpoint is bounded by a short timeout.
+- **Bounded delivery.** Laravel terminable middleware emits exactly one capped batch
+  per completed request after `fastcgi_finish_request()`. cURL has hard connect/send
+  timeouts and no retries, so PHP-FPM/Octane does not accumulate a background queue.
 - **No binding values.** SQL is normalized to a template; only a binding *count* is sent.
 - **No raw SQL** unless you explicitly set `RESTLYTICS_CAPTURE_SQL=true` (then capped at 2048 chars).
 - **Scrubbed URLs.** Every `url.full` query value is redacted and credentials/fragments are removed.
   The `http.route` attribute is always the **template** (`/users/{id}`), never the raw URL.
 - **No content-bearing fields.** Request/response bodies and headers plus exception content are never exported.
 - **Sampling.** Lower `RESTLYTICS_SAMPLE_RATE` to capture a fraction of traffic.
+
+The production `CurlTransport` exposes payload-free delivery counters and no-op
+`flush()` / `close()` lifecycle methods (delivery has already settled when
+`send()` returns):
+
+```php
+$transport = app(\Restlytics\Laravel\Transport\Transport::class);
+if ($transport instanceof \Restlytics\Laravel\Transport\CurlTransport) {
+    logger()->debug('restlytics delivery', (array) $transport->diagnostics());
+}
+```
 
 ---
 

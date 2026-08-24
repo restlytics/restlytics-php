@@ -24,6 +24,8 @@ final class Span
 
     public const KIND_CLIENT = 3;
 
+    public const KIND_CONSUMER = 5;
+
     /** OTLP status codes. */
     public const STATUS_UNSET = 0;
 
@@ -45,6 +47,9 @@ final class Span
     private int $statusCode = self::STATUS_UNSET;
 
     private ?string $statusMessage = null;
+
+    /** @var list<array{traceId:string,spanId:string,attributes:list<array{key:string,value:array<string,string>}>}> */
+    private array $links = [];
 
     public function __construct(
         public readonly string $traceId,
@@ -125,6 +130,20 @@ final class Span
         return $this->statusCode;
     }
 
+    public function addLink(string $traceId, string $spanId, string $kind): self
+    {
+        $this->links[] = [
+            'traceId' => $traceId,
+            'spanId' => $spanId,
+            'attributes' => [[
+                'key' => 'restlytics.link.kind',
+                'value' => ['stringValue' => $kind],
+            ]],
+        ];
+
+        return $this;
+    }
+
     /** Duration in nanoseconds (clamped non-negative against clock skew). */
     public function durationNs(): int
     {
@@ -155,6 +174,10 @@ final class Span
 
         if ($this->attributes !== []) {
             $span['attributes'] = $this->serializeAttributes();
+        }
+
+        if ($this->links !== []) {
+            $span['links'] = $this->links;
         }
 
         // Only attach status when it carries signal (OK/ERROR); UNSET is the default.

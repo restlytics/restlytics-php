@@ -14,7 +14,10 @@ namespace Restlytics\Laravel\Transport;
 interface Transport
 {
     /**
-     * @param array<string, mixed> $payload OTLP ExportTraceServiceRequest (associative array)
+     * @param  array<string, mixed>  $payload  OTLP ExportTraceServiceRequest (associative array)
      */
     public function send(array $payload): void;
+
+    /** @param array<string, mixed> $payload OTLP ExportLogsServiceRequest */
+    public function sendLogs(array $payload): void;
 }

@@ -19,9 +19,21 @@ final class NullTransport implements Transport
     /** @var list<array<string, mixed>> */
     public array $sent = [];
 
+    /** @var array<string, mixed>|null */
+    public ?array $lastLogPayload = null;
+
+    /** @var list<array<string, mixed>> */
+    public array $sentLogs = [];
+
     public function send(array $payload): void
     {
         $this->lastPayload = $payload;
         $this->sent[] = $payload;
+    }
+
+    public function sendLogs(array $payload): void
+    {
+        $this->lastLogPayload = $payload;
+        $this->sentLogs[] = $payload;
     }
 }

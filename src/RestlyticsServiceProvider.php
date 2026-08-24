@@ -56,6 +56,20 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $this->app->singleton(BackgroundWork::class, static fn ($app): BackgroundWork => new BackgroundWork(
             $app->make(Tracer::class),
         ));
+
+        $this->app->singleton(LogBuffer::class, static function ($app): LogBuffer {
+            $config = $app['config'];
+
+            return new LogBuffer(
+                tracer: $app->make(Tracer::class),
+                transport: $app->make(Transport::class),
+                serviceName: (string) $config->get('restlytics.service_name', 'laravel'),
+                environment: (string) $config->get('restlytics.env', 'production'),
+                enabled: (bool) $config->get('restlytics.logs', false),
+                minSeverity: (int) $config->get('restlytics.logs_min_severity', 13),
+                maxRecords: (int) $config->get('restlytics.max_logs', 256),
+            );
+        });
     }
 
     public function boot(): void
@@ -75,6 +89,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $this->registerHttpListener();
         $this->registerCacheListener();
         $this->registerBackgroundListeners();
+        $this->registerLogListener();
         $this->registerOctaneResetHooks();
     }
 
@@ -92,12 +107,13 @@ final class RestlyticsServiceProvider extends ServiceProvider
     private function registerMiddleware(): void
     {
         $tracer = $this->app->make(Tracer::class);
+        $logs = $this->app->make(LogBuffer::class);
         $ignore = (array) $this->app['config']->get('restlytics.ignore_paths', []);
 
         // Bind a concrete, pre-configured instance so the framework reuses ours
         // (with ignore paths + the tracer) rather than newing up an empty one.
-        $this->app->singleton(RestlyticsMiddleware::class, static function () use ($tracer, $ignore): RestlyticsMiddleware {
-            return new RestlyticsMiddleware($tracer, $ignore);
+        $this->app->singleton(RestlyticsMiddleware::class, static function () use ($tracer, $logs, $ignore): RestlyticsMiddleware {
+            return new RestlyticsMiddleware($tracer, $ignore, $logs);
         });
 
         if ($this->app->bound(HttpKernel::class)) {
@@ -270,6 +286,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
 
         $work = $this->app->make(BackgroundWork::class);
         $tracer = $this->app->make(Tracer::class);
+        $logs = $this->app->make(LogBuffer::class);
 
         Queue::createPayloadUsing(static function (string $connection, ?string $queue) use ($work): array {
             return $work->injectQueueCarrier([], $connection, $queue ?? 'default');
@@ -296,11 +313,13 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 $tracer->reset();
             }
         });
-        Event::listen('Illuminate\\Queue\\Events\\JobProcessed', static function () use ($tracer): void {
+        Event::listen('Illuminate\\Queue\\Events\\JobProcessed', static function () use ($tracer, $logs): void {
             $tracer->finishRootSpan();
+            $logs->flush();
         });
-        Event::listen('Illuminate\\Queue\\Events\\JobExceptionOccurred', static function () use ($tracer): void {
+        Event::listen('Illuminate\\Queue\\Events\\JobExceptionOccurred', static function () use ($tracer, $logs): void {
             $tracer->finishRootSpan(true);
+            $logs->flush();
         });
 
         Event::listen('Illuminate\\Console\\Events\\CommandStarting', static function (object $event) use ($work, $tracer): void {
@@ -309,11 +328,12 @@ final class RestlyticsServiceProvider extends ServiceProvider
             }
             $work->startCommand((string) ($event->command ?? 'unnamed-command'));
         });
-        Event::listen('Illuminate\\Console\\Events\\CommandFinished', static function (object $event) use ($work, $tracer): void {
+        Event::listen('Illuminate\\Console\\Events\\CommandFinished', static function (object $event) use ($work, $tracer, $logs): void {
             if ($tracer->rootCategory() !== 'command') {
                 return;
             }
             $work->finishCommand((int) ($event->exitCode ?? 0));
+            $logs->flush();
         });
 
         Event::listen('Illuminate\\Console\\Events\\ScheduledTaskStarting', static function (object $event) use ($work): void {
@@ -323,16 +343,42 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 : (string) ($task->description ?? 'unnamed-schedule');
             $work->startSchedule($name, (string) ($task->expression ?? 'unknown'));
         });
-        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFinished', static function () use ($tracer): void {
+        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFinished', static function () use ($tracer, $logs): void {
             if ($tracer->rootCategory() === 'schedule') {
                 $tracer->finishRootSpan();
+                $logs->flush();
             }
         });
-        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFailed', static function () use ($tracer): void {
+        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFailed', static function () use ($tracer, $logs): void {
             if ($tracer->rootCategory() === 'schedule') {
                 $tracer->finishRootSpan(true);
+                $logs->flush();
             }
         });
+    }
+
+    /** Attach a source-redacting Monolog handler to Laravel's default channel. */
+    private function registerLogListener(): void
+    {
+        if (! (bool) $this->app['config']->get('restlytics.logs', false) || ! class_exists(RestlyticsLogHandler::class)) {
+            return;
+        }
+
+        try {
+            $manager = $this->app->make('log');
+            $channel = method_exists($manager, 'channel') ? $manager->channel() : $manager;
+            $logger = method_exists($channel, 'getLogger') ? $channel->getLogger() : null;
+            if ($logger !== null && method_exists($logger, 'pushHandler')) {
+                $logger->pushHandler(new RestlyticsLogHandler($this->app->make(LogBuffer::class)));
+            }
+
+            $logs = $this->app->make(LogBuffer::class);
+            register_shutdown_function(static function () use ($logs): void {
+                $logs->flush();
+            });
+        } catch (\Throwable) {
+            // Unsupported/custom logging stacks remain unaffected.
+        }
     }
 
     /**
@@ -343,9 +389,11 @@ final class RestlyticsServiceProvider extends ServiceProvider
     private function registerOctaneResetHooks(): void
     {
         $tracer = $this->app->make(Tracer::class);
+        $logs = $this->app->make(LogBuffer::class);
 
         foreach (['Laravel\\Octane\\Events\\RequestReceived', 'Laravel\\Octane\\Events\\TaskReceived'] as $eventClass) {
-            Event::listen($eventClass, static function () use ($tracer): void {
+            Event::listen($eventClass, static function () use ($tracer, $logs): void {
+                $logs->flush();
                 $tracer->reset();
             });
         }

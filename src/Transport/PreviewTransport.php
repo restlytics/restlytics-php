@@ -21,23 +21,43 @@ final class PreviewTransport implements Transport
 
     public function send(array $payload): void
     {
+        $this->report($payload, 'traces');
+    }
+
+    public function sendLogs(array $payload): void
+    {
+        $this->report($payload, 'logs');
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function report(array $payload, string $signal): void
+    {
         try {
             $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_THROW_ON_ERROR);
             $compressed = gzencode($encoded, 6);
-            $spanCount = 0;
-            foreach (($payload['resourceSpans'] ?? []) as $resource) {
-                foreach (($resource['scopeSpans'] ?? []) as $scope) {
-                    $spanCount += count($scope['spans'] ?? []);
+            $recordCount = 0;
+            if ($signal === 'traces') {
+                foreach (($payload['resourceSpans'] ?? []) as $resource) {
+                    foreach (($resource['scopeSpans'] ?? []) as $scope) {
+                        $recordCount += count($scope['spans'] ?? []);
+                    }
+                }
+            } else {
+                foreach (($payload['resourceLogs'] ?? []) as $resource) {
+                    foreach (($resource['scopeLogs'] ?? []) as $scope) {
+                        $recordCount += count($scope['logRecords'] ?? []);
+                    }
                 }
             }
 
             $report = [
                 'mode' => 'preview',
                 'networkRequestMade' => false,
-                'signal' => 'traces',
+                'signal' => $signal,
                 'configuredSampleRate' => $this->sampleRate,
                 'sampled' => true,
-                'spanCount' => $spanCount,
+                'spanCount' => $signal === 'traces' ? $recordCount : 0,
+                'logRecordCount' => $signal === 'logs' ? $recordCount : 0,
                 'jsonBytes' => strlen($encoded),
                 'gzipBytes' => $compressed === false ? 0 : strlen($compressed),
                 'redactionPolicyApplied' => [

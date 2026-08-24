@@ -7,6 +7,8 @@ namespace Restlytics\Laravel\Support;
 /** Privacy boundary shared by every Laravel instrumentation path. */
 final class Redaction
 {
+    private const REDACTED = '[REDACTED]';
+
     /** @var array<string, true> */
     private const SENSITIVE_SEGMENTS = [
         'authorization' => true,
@@ -29,6 +31,11 @@ final class Redaction
         'stack' => true,
         'stacktrace' => true,
         'log' => true,
+        'err' => true,
+        'error' => true,
+        'exception' => true,
+        'binding' => true,
+        'bindings' => true,
     ];
 
     public static function isSensitiveAttributeKey(string $key): bool
@@ -91,5 +98,34 @@ final class Redaction
         unset($message);
 
         return null;
+    }
+
+    /**
+     * Scrub common credential and personal-data forms from an application log
+     * message before it enters the SDK buffer. This is deliberately applied at
+     * capture time so neither preview nor a failing transport can observe the
+     * original message.
+     */
+    public static function logText(string $message, int $maxLength = 8192): string
+    {
+        $text = mb_substr($message, 0, max(0, $maxLength));
+        $patterns = [
+            '/-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----[\s\S]*?-----END (?:[A-Z0-9]+ )*PRIVATE KEY-----/iu' => self::REDACTED,
+            // URL userinfo and query/fragment values.
+            '#(https?://)[^\s/@]+@#iu' => '$1'.self::REDACTED.'@',
+            '/([?&][^=&#\s]+)=([^&#\s]*)/u' => '$1='.self::REDACTED,
+            // Authorization schemes, JWTs, and common key=value credentials.
+            '/\b(Bearer|Basic)\s+[A-Za-z0-9._~+\/=:-]+/iu' => '$1 '.self::REDACTED,
+            '/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/u' => self::REDACTED,
+            '/\b(password|passwd|secret|token|api[_-]?key|access[_-]?token|authorization|bindings?|request[_ .-]?body|response[_ .-]?body|payload|exception|stack)\s*[:=]\s*([^\s,;&]+)/iu' => '$1='.self::REDACTED,
+            // Email addresses are personal data; preserve no local/domain fragments.
+            '/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/iu' => self::REDACTED,
+        ];
+
+        foreach ($patterns as $pattern => $replacement) {
+            $text = preg_replace($pattern, $replacement, $text) ?? self::REDACTED;
+        }
+
+        return $text;
     }
 }

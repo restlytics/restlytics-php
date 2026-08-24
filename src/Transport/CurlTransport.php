@@ -45,6 +45,17 @@ final class CurlTransport implements Transport
 
     public function send(array $payload): void
     {
+        $this->sendTo('/v1/traces', $payload);
+    }
+
+    public function sendLogs(array $payload): void
+    {
+        $this->sendTo('/v1/logs', $payload);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function sendTo(string $path, array $payload): void
+    {
         // Defensive: without the basics, there's nothing useful to do — and we
         // must not throw, so just bail quietly.
         if ($this->closed || $this->ingestUrl === '' || $this->key === '' || ! \function_exists('curl_init')) {
@@ -74,7 +85,7 @@ final class CurlTransport implements Transport
                 return;
             }
 
-            $url = rtrim($this->ingestUrl, '/').'/v1/traces';
+            $url = rtrim($this->ingestUrl, '/').$path;
 
             $ch = curl_init($url);
             if ($ch === false) {

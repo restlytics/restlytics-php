@@ -38,11 +38,14 @@ php artisan vendor:publish --tag=restlytics-config
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `RESTLYTICS_KEY` | `""` | Project ingest key (sent as `X-Restlytics-Key`). Empty = disabled. |
-| `RESTLYTICS_INGEST_URL` | `https://ingest.restlytics.com` | Ingest base URL; SDK POSTs to `{url}/v1/traces`. |
+| `RESTLYTICS_INGEST_URL` | `https://ingest.restlytics.com` | Ingest base URL; SDK POSTs to `{url}/v1/traces` and, when enabled, `/v1/logs`. |
 | `RESTLYTICS_ENV` | `APP_ENV` | `deployment.environment` resource attribute. |
 | `RESTLYTICS_SERVICE_NAME` | `APP_NAME` | `service.name` resource attribute. |
 | `RESTLYTICS_SAMPLE_RATE` | `1.0` | Head-based trace sampling, `0.0`–`1.0`. |
 | `RESTLYTICS_TRANSPORT` | `curl` | `curl` (prod), `preview` (local structured report), `log` (raw dev payload), `null` (off/tests). |
+| `RESTLYTICS_LOGS` | `false` | Opt in to source-redacted application-log export from the default Laravel log channel. |
+| `RESTLYTICS_LOGS_MIN_SEVERITY` | `13` | Minimum OTLP severity; `13` is WARN, `17` is ERROR. |
+| `RESTLYTICS_MAX_LOGS` | `256` | Per-request/work-unit log-record buffer cap. |
 | `RESTLYTICS_TIMEOUT_MS` | `2000` | Hard cap on the send. |
 | `RESTLYTICS_CAPTURE_SQL` | `false` | Send raw SQL text (capped 2048). Off = template only. |
 | `RESTLYTICS_INSTRUMENT_DB` / `_HTTP` / `_CACHE` | `true` | Per-instrument toggles. |
@@ -66,6 +69,30 @@ php artisan vendor:publish --tag=restlytics-config
    work isn't double-counted; `app` self-time is the root's exclusive time. Emitted as
    `restlytics.self_ns.*` on the root span.
 6. **Errors** — 5xx responses and uncaught exceptions set the span status to `ERROR (2)`.
+
+### Application logs (opt-in preview)
+
+Set `RESTLYTICS_LOGS=true` to attach a source-redacting Monolog handler to
+Laravel's default channel. Records at or above `RESTLYTICS_LOGS_MIN_SEVERITY`
+are buffered with a hard cap, stamped with the active trace/root-span ID when
+available, and flushed to `/v1/logs` after the response or work unit. Logs are
+not trace-sampled, so an ERROR emitted by an unsampled request can still carry
+its trace ID and `flags=0`.
+
+For a custom channel, attach the same handler explicitly:
+
+```php
+$logger = Log::channel('payments')->getLogger();
+$logger->pushHandler(new \Restlytics\Laravel\RestlyticsLogHandler(
+    app(\Restlytics\Laravel\LogBuffer::class),
+));
+```
+
+The hook removes sensitive structured keys, non-scalar context (including
+exceptions), URL credentials/query values, authorization tokens, common secret
+assignments, JWTs, and email addresses before buffering. Treat the scrubber as
+defense in depth: keep secrets and arbitrary personal data out of application
+log messages at the source.
 
 ### Queues, Artisan commands, and scheduled tasks
 
@@ -119,6 +146,9 @@ restlytics is built to be safe to run in production against real traffic:
 - **Scrubbed URLs.** Every `url.full` query value is redacted and credentials/fragments are removed.
   The `http.route` attribute is always the **template** (`/users/{id}`), never the raw URL.
 - **No content-bearing fields.** Request/response bodies and headers plus exception content are never exported.
+- **Logs are explicit opt-in.** The disabled default sends no application logs. When enabled, the
+  source hook filters by severity, scrubs the message and safe scalar context before buffering, and
+  never exports exception objects, stacks, or known-sensitive context keys.
 - **Sampling.** Lower `RESTLYTICS_SAMPLE_RATE` to capture a fraction of traffic.
 
 The production `CurlTransport` exposes payload-free delivery counters and no-op

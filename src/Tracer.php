@@ -35,6 +35,9 @@ final class Tracer
 
     private ?Span $rootSpan = null;
 
+    /** Ambient root span id retained even when trace head sampling drops spans. */
+    private ?string $correlationSpanId = null;
+
     /** @var list<Span> child spans (db/http/cache/...) buffered for this request */
     private array $spans = [];
 
@@ -70,6 +73,7 @@ final class Tracer
         $this->traceId = '';
         $this->rootParentSpanId = null;
         $this->rootSpan = null;
+        $this->correlationSpanId = null;
         $this->spans = [];
         $this->wallAnchorNs = 0;
         $this->monoAnchorNs = 0;
@@ -92,9 +96,25 @@ final class Tracer
         return $this->traceId;
     }
 
+    /** Ambient correlation for the opt-in log signal, including unsampled traces. */
+    public function currentTraceId(): ?string
+    {
+        return $this->isActive() ? $this->traceId : null;
+    }
+
+    public function currentSpanId(): ?string
+    {
+        return $this->isActive() ? $this->correlationSpanId : null;
+    }
+
+    public function traceFlags(): int
+    {
+        return $this->isSampled() ? 1 : 0;
+    }
+
     public function rootSpanId(): ?string
     {
-        return $this->rootSpan?->spanId;
+        return $this->isActive() ? $this->correlationSpanId : null;
     }
 
     public function rootCategory(): ?string
@@ -145,6 +165,9 @@ final class Tracer
         // Anchor wall-clock ↔ monotonic clocks together.
         $this->wallAnchorNs = self::wallClockNs();
         $this->monoAnchorNs = hrtime(true);
+        // Logs are an independent signal. Preserve an ambient span id even when
+        // trace sampling drops the span payload so retained logs remain useful.
+        $this->correlationSpanId = Ids::spanId();
 
         if (! $this->sampled) {
             return; // not sampled: stay cheap, record nothing
@@ -152,7 +175,7 @@ final class Tracer
 
         $this->rootSpan = new Span(
             traceId: $this->traceId,
-            spanId: Ids::spanId(),
+            spanId: $this->correlationSpanId,
             parentSpanId: $this->rootParentSpanId,
             name: $name,
             kind: $kind,

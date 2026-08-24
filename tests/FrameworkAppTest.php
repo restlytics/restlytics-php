@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Restlytics\Laravel\Tests;
 
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Log;
 use Orchestra\Testbench\TestCase;
 use Restlytics\Laravel\RestlyticsServiceProvider;
 
@@ -84,12 +85,23 @@ final class FrameworkAppTest extends TestCase
         $app['config']->set('restlytics.env', 'test');
         $app['config']->set('restlytics.timeout_ms', 300);
         $app['config']->set('restlytics.ignore_paths', []);
+        $app['config']->set('restlytics.logs', true);
+        $app['config']->set('restlytics.logs_min_severity', 13);
     }
 
     protected function defineRoutes($router): void
     {
         self::assertInstanceOf(Router::class, $router);
-        $router->get('/orders/{id}', static fn (string $id) => response()->json(['id' => $id]));
+        $router->get('/orders/{id}', static function (string $id) {
+            if ($id === '42') {
+                Log::warning('checkout token='.self::SECRET.' buyer@example.test', [
+                    'safe.order_id' => $id,
+                    'authorization' => 'Bearer '.self::SECRET,
+                ]);
+            }
+
+            return response()->json(['id' => $id]);
+        });
         $router->get('/fail/{id}', static fn () => response('unavailable', 503));
     }
 
@@ -114,13 +126,27 @@ final class FrameworkAppTest extends TestCase
         self::assertStringNotContainsString(self::PROJECT_KEY, json_encode($payload, JSON_THROW_ON_ERROR));
         self::assertStringNotContainsString(self::SECRET, json_encode($payload, JSON_THROW_ON_ERROR));
 
+        $logCapture = $this->capture(1);
+        self::assertSame('/v1/logs', $logCapture['path']);
+        self::assertSame(self::PROJECT_KEY, $logCapture['key']);
+        $logPayload = $this->payload($logCapture);
+        $record = $logPayload['resourceLogs'][0]['scopeLogs'][0]['logRecords'][0];
+        self::assertSame($root['traceId'], $record['traceId']);
+        self::assertSame($root['spanId'], $record['spanId']);
+        self::assertSame(13, $record['severityNumber']);
+        $encodedLog = json_encode($logPayload, JSON_THROW_ON_ERROR);
+        self::assertStringContainsString('[REDACTED]', $encodedLog);
+        self::assertStringNotContainsString(self::SECRET, $encodedLog);
+        self::assertStringNotContainsString('buyer@example.test', $encodedLog);
+        self::assertStringNotContainsString('authorization', $encodedLog);
+
         file_put_contents($this->statusPath, '503');
         $this->get('/orders/43')->assertOk();
-        $this->capture(1); // transport reached the failing ingest and swallowed its response
+        $this->capture(2); // transport reached the failing ingest and swallowed its response
 
         file_put_contents($this->statusPath, '202');
         $this->get('/fail/44')->assertStatus(503);
-        $failed = $this->payload($this->capture(2));
+        $failed = $this->payload($this->capture(3));
         $failedRoot = $failed['resourceSpans'][0]['scopeSpans'][0]['spans'][0];
         self::assertSame(2, $failedRoot['status']['code']);
         self::assertSame(['stringValue' => '/fail/{id}'], $this->attributes($failedRoot)['http.route']);

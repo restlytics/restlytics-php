@@ -10,6 +10,7 @@ use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\ServiceProvider;
 use Restlytics\Laravel\Middleware\RestlyticsMiddleware;
 use Restlytics\Laravel\Support\Redaction;
@@ -51,6 +52,10 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 maxSpans: (int) $config->get('restlytics.max_spans', 2000),
             );
         });
+
+        $this->app->singleton(BackgroundWork::class, static fn ($app): BackgroundWork => new BackgroundWork(
+            $app->make(Tracer::class),
+        ));
     }
 
     public function boot(): void
@@ -69,6 +74,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $this->registerDatabaseListener();
         $this->registerHttpListener();
         $this->registerCacheListener();
+        $this->registerBackgroundListeners();
         $this->registerOctaneResetHooks();
     }
 
@@ -253,6 +259,80 @@ final class RestlyticsServiceProvider extends ServiceProvider
         } catch (\Throwable) {
             // best-effort
         }
+    }
+
+    /** Laravel-native queue, Artisan, and scheduler lifecycle instrumentation. */
+    private function registerBackgroundListeners(): void
+    {
+        if (! (bool) $this->app['config']->get('restlytics.instruments.jobs', true)) {
+            return;
+        }
+
+        $work = $this->app->make(BackgroundWork::class);
+        $tracer = $this->app->make(Tracer::class);
+
+        Queue::createPayloadUsing(static function (string $connection, ?string $queue) use ($work): array {
+            return $work->injectQueueCarrier([], $connection, $queue ?? 'default');
+        });
+
+        Event::listen('Illuminate\\Queue\\Events\\JobProcessing', static function (object $event) use ($work, $tracer): void {
+            try {
+                $payload = method_exists($event->job, 'payload') ? (array) $event->job->payload() : [];
+                $envelope = (array) ($payload['__restlytics'] ?? []);
+                $queue = method_exists($event->job, 'getQueue') ? (string) $event->job->getQueue() : 'default';
+                $attempt = method_exists($event->job, 'attempts') ? (int) $event->job->attempts() : 1;
+                $enqueuedNs = isset($envelope['enqueued_ns']) ? (int) $envelope['enqueued_ns'] : null;
+                $work->startJob(
+                    name: (string) ($payload['displayName'] ?? 'unnamed-job'),
+                    system: (string) ($event->connectionName ?? 'unknown'),
+                    destination: $queue,
+                    attempt: $attempt,
+                    maxAttempts: isset($payload['maxTries']) ? (int) $payload['maxTries'] : null,
+                    enqueuedNs: $enqueuedNs,
+                    messageId: isset($payload['uuid']) ? (string) $payload['uuid'] : null,
+                    traceparent: isset($envelope['traceparent']) ? (string) $envelope['traceparent'] : null,
+                );
+            } catch (\Throwable) {
+                $tracer->reset();
+            }
+        });
+        Event::listen('Illuminate\\Queue\\Events\\JobProcessed', static function () use ($tracer): void {
+            $tracer->finishRootSpan();
+        });
+        Event::listen('Illuminate\\Queue\\Events\\JobExceptionOccurred', static function () use ($tracer): void {
+            $tracer->finishRootSpan(true);
+        });
+
+        Event::listen('Illuminate\\Console\\Events\\CommandStarting', static function (object $event) use ($work, $tracer): void {
+            if ($tracer->rootCategory() === 'schedule') {
+                return;
+            }
+            $work->startCommand((string) ($event->command ?? 'unnamed-command'));
+        });
+        Event::listen('Illuminate\\Console\\Events\\CommandFinished', static function (object $event) use ($work, $tracer): void {
+            if ($tracer->rootCategory() !== 'command') {
+                return;
+            }
+            $work->finishCommand((int) ($event->exitCode ?? 0));
+        });
+
+        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskStarting', static function (object $event) use ($work): void {
+            $task = $event->task;
+            $name = method_exists($task, 'getSummaryForDisplay')
+                ? (string) $task->getSummaryForDisplay()
+                : (string) ($task->description ?? 'unnamed-schedule');
+            $work->startSchedule($name, (string) ($task->expression ?? 'unknown'));
+        });
+        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFinished', static function () use ($tracer): void {
+            if ($tracer->rootCategory() === 'schedule') {
+                $tracer->finishRootSpan();
+            }
+        });
+        Event::listen('Illuminate\\Console\\Events\\ScheduledTaskFailed', static function () use ($tracer): void {
+            if ($tracer->rootCategory() === 'schedule') {
+                $tracer->finishRootSpan(true);
+            }
+        });
     }
 
     /**

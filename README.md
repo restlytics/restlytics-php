@@ -67,6 +67,33 @@ php artisan vendor:publish --tag=restlytics-config
    `restlytics.self_ns.*` on the root span.
 6. **Errors** — 5xx responses and uncaught exceptions set the span status to `ERROR (2)`.
 
+### Queues, Artisan commands, and scheduled tasks
+
+When `RESTLYTICS_JOBS=true` (the default), the service provider automatically
+instruments Laravel queue, Artisan, and scheduler lifecycle events. Queue
+payload creation receives a namespaced `__restlytics` carrier; workers continue
+the producer trace as a `CONSUMER` root and add an explicit enqueue span link.
+Commands and schedules use `SERVER` roots, capture exit codes/cron expressions,
+and reuse the existing DB/HTTP/cache child instrumentation.
+
+For custom workers, resolve `BackgroundWork` and wrap the framework callback:
+
+```php
+$work = app(\Restlytics\Laravel\BackgroundWork::class);
+$work->job(
+    'App\\Jobs\\SendInvoice',
+    'redis',
+    'emails',
+    fn () => $handler($payload),
+    attempt: $attempt,
+    traceparent: $payload['__restlytics']['traceparent'] ?? null,
+);
+```
+
+Stable job/command/task names are required; ids, arguments, payloads, exception
+messages, and stack traces are never exported. Enqueue time is isolated in
+`restlytics.self_ns.queue`.
+
 Timing uses the monotonic clock (`hrtime(true)`) for durations, anchored to one wall-clock reading
 for absolute epoch-nanosecond timestamps — durations stay correct across NTP adjustments.
 

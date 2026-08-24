@@ -26,10 +26,13 @@ use Restlytics\Laravel\Transport\Transport;
 final class Tracer
 {
     private bool $enabled = false;
+
     private bool $sampled = false;
 
     private string $traceId = '';
+
     private ?string $rootParentSpanId = null;
+
     private ?Span $rootSpan = null;
 
     /** @var list<Span> child spans (db/http/cache/...) buffered for this request */
@@ -37,11 +40,15 @@ final class Tracer
 
     /** Wall-clock epoch nanoseconds captured at the anchor point. */
     private int $wallAnchorNs = 0;
+
     /** Monotonic reading (hrtime) captured at the same anchor point. */
     private int $monoAnchorNs = 0;
 
     /** Count of DB spans seen this request (for restlytics.db_query_count). */
     private int $dbQueryCount = 0;
+
+    /** Root category for the current request/job/command/schedule. */
+    private string $rootCategory = 'app';
 
     public function __construct(
         private readonly Transport $transport,
@@ -50,8 +57,7 @@ final class Tracer
         private readonly float $sampleRate = 1.0,
         /** Hard cap on buffered spans to bound memory under pathological traces. */
         private readonly int $maxSpans = 2000,
-    ) {
-    }
+    ) {}
 
     /**
      * Reset all per-request state. Called at request start (middleware handle and
@@ -68,11 +74,17 @@ final class Tracer
         $this->wallAnchorNs = 0;
         $this->monoAnchorNs = 0;
         $this->dbQueryCount = 0;
+        $this->rootCategory = 'app';
     }
 
     public function isSampled(): bool
     {
         return $this->enabled && $this->sampled;
+    }
+
+    public function isActive(): bool
+    {
+        return $this->enabled && $this->traceId !== '';
     }
 
     public function traceId(): string
@@ -85,6 +97,11 @@ final class Tracer
         return $this->rootSpan?->spanId;
     }
 
+    public function rootCategory(): ?string
+    {
+        return $this->rootSpan === null ? null : $this->rootCategory;
+    }
+
     /**
      * Open the root SERVER span at request start.
      *
@@ -95,8 +112,20 @@ final class Tracer
      */
     public function startServerSpan(string $name, ?string $traceparent = null): void
     {
+        $this->startRootSpan($name, Span::KIND_SERVER, 'app', $traceparent);
+    }
+
+    /** Open a root span for any supported unit of work. */
+    public function startRootSpan(
+        string $name,
+        int $kind,
+        string $category,
+        ?string $traceparent = null,
+        bool $linkParent = false,
+    ): void {
         $this->reset();
         $this->enabled = true;
+        $this->rootCategory = $category;
 
         $incoming = Ids::parseTraceparent($traceparent);
         if ($incoming !== null) {
@@ -126,10 +155,14 @@ final class Tracer
             spanId: Ids::spanId(),
             parentSpanId: $this->rootParentSpanId,
             name: $name,
-            kind: Span::KIND_SERVER,
+            kind: $kind,
             startUnixNano: $this->nowNs(),
             endUnixNano: $this->nowNs(),
         );
+        $this->rootSpan->setString('restlytics.category', $category);
+        if ($linkParent && $this->rootParentSpanId !== null) {
+            $this->rootSpan->addLink($this->traceId, $this->rootParentSpanId, 'enqueue');
+        }
     }
 
     public function rootSpan(): ?Span
@@ -145,8 +178,13 @@ final class Tracer
      * Returns null when not sampled or when the buffer cap is hit (telemetry must
      * never grow unbounded).
      */
-    public function addChildSpan(string $name, int $startNs, int $endNs, int $kind = Span::KIND_CLIENT): ?Span
-    {
+    public function addChildSpan(
+        string $name,
+        int $startNs,
+        int $endNs,
+        int $kind = Span::KIND_CLIENT,
+        ?string $spanId = null,
+    ): ?Span {
         if (! $this->isSampled() || $this->rootSpan === null) {
             return null;
         }
@@ -156,7 +194,7 @@ final class Tracer
 
         $span = new Span(
             traceId: $this->traceId,
-            spanId: Ids::spanId(),
+            spanId: $spanId ?? Ids::spanId(),
             parentSpanId: $this->rootSpan->spanId,
             name: $name,
             kind: $kind,
@@ -166,6 +204,18 @@ final class Tracer
         $this->spans[] = $span;
 
         return $span;
+    }
+
+    public function startChildSpan(
+        string $name,
+        string $category,
+        int $kind = Span::KIND_CLIENT,
+        ?string $spanId = null,
+    ): ?Span {
+        $now = $this->nowNs();
+
+        return $this->addChildSpan($name, $now, $now, $kind, $spanId)
+            ?->setString('restlytics.category', $category);
     }
 
     public function incrementDbQueryCount(): void
@@ -183,6 +233,11 @@ final class Tracer
      */
     public function finishServerSpan(): void
     {
+        $this->finishRootSpan();
+    }
+
+    public function finishRootSpan(bool $failed = false): void
+    {
         if (! $this->isSampled() || $this->rootSpan === null) {
             $this->reset();
 
@@ -191,9 +246,15 @@ final class Tracer
 
         $this->rootSpan->setEnd($this->nowNs());
 
+        if ($failed) {
+            $this->rootSpan->setStatus(Span::STATUS_ERROR);
+        } elseif ($this->rootSpan->statusCode() === Span::STATUS_UNSET) {
+            $this->rootSpan->setStatus(Span::STATUS_OK);
+        }
+
         $this->attachSelfTime();
         $this->rootSpan->setInt('restlytics.db_query_count', $this->dbQueryCount);
-        $this->rootSpan->setString('restlytics.category', 'app');
+        $this->rootSpan->setString('restlytics.category', $this->rootCategory);
 
         $this->flush();
         $this->reset();
@@ -241,7 +302,7 @@ final class Tracer
         $rootDur = $rootSpan->durationNs();
 
         /** @var array<string, list<array{0:int,1:int}>> $byCat */
-        $byCat = ['db' => [], 'http' => [], 'cache' => [], 'app' => []];
+        $byCat = ['db' => [], 'http' => [], 'cache' => [], 'queue' => [], 'app' => []];
         /** @var list<array{0:int,1:int}> $all */
         $all = [];
 
@@ -261,6 +322,7 @@ final class Tracer
         $selfDb = Intervals::unionLength($byCat['db']);
         $selfHttp = Intervals::unionLength($byCat['http']);
         $selfCache = Intervals::unionLength($byCat['cache']);
+        $selfQueue = Intervals::unionLength($byCat['queue']);
         // app self-time = explicit app-category child time + the root's own
         // exclusive (uncovered) time. Mirrors the ingestion service's computation.
         $selfApp = Intervals::unionLength($byCat['app']) + max(0, $rootDur - Intervals::unionLength($all));
@@ -268,6 +330,7 @@ final class Tracer
         $rootSpan->setInt('restlytics.self_ns.db', $selfDb);
         $rootSpan->setInt('restlytics.self_ns.http', $selfHttp);
         $rootSpan->setInt('restlytics.self_ns.cache', $selfCache);
+        $rootSpan->setInt('restlytics.self_ns.queue', $selfQueue);
         $rootSpan->setInt('restlytics.self_ns.app', $selfApp);
     }
 
@@ -281,7 +344,7 @@ final class Tracer
         foreach ($otlp['attributes'] ?? [] as $kv) {
             if (($kv['key'] ?? null) === 'restlytics.category') {
                 $cat = $kv['value']['stringValue'] ?? null;
-                if (\in_array($cat, ['db', 'http', 'cache', 'app'], true)) {
+                if (\in_array($cat, ['db', 'http', 'cache', 'queue', 'app'], true)) {
                     return $cat;
                 }
             }

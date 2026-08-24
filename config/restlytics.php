@@ -54,6 +54,17 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Source-safe application logs (opt-in)
+    |--------------------------------------------------------------------------
+    | Native log capture is disabled by default. When enabled, records below the
+    | configured OTLP severity are discarded before buffering. WARN is 13.
+    */
+    'logs' => (bool) env('RESTLYTICS_LOGS', false),
+    'logs_min_severity' => (int) env('RESTLYTICS_LOGS_MIN_SEVERITY', 13),
+    'max_logs' => (int) env('RESTLYTICS_MAX_LOGS', 256),
+
+    /*
+    |--------------------------------------------------------------------------
     | cURL transport timeout (milliseconds)
     |--------------------------------------------------------------------------
     | Hard cap on the send. Runs after the response is flushed, but we still bound

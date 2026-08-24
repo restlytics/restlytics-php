@@ -6,6 +6,7 @@ namespace Restlytics\Laravel\Middleware;
 
 use Closure;
 use Illuminate\Http\Request;
+use Restlytics\Laravel\LogBuffer;
 use Restlytics\Laravel\Span;
 use Restlytics\Laravel\Tracer;
 use Symfony\Component\HttpFoundation\Response;
@@ -29,6 +30,7 @@ final class RestlyticsMiddleware
     public function __construct(
         private readonly Tracer $tracer,
         private readonly array $ignorePaths = [],
+        private readonly ?LogBuffer $logs = null,
     ) {}
 
     public function handle(Request $request, Closure $next): Response
@@ -60,7 +62,11 @@ final class RestlyticsMiddleware
         try {
             $root = $this->tracer->rootSpan();
             if ($root === null) {
-                return; // not sampled / ignored
+                // Logs are not trace-sampled. An ERROR from an unsampled request
+                // still ships with its trace id (and sampled flag 0).
+                $this->logs?->flush();
+
+                return; // trace not sampled / request ignored
             }
 
             // http.route MUST be the TEMPLATE (e.g. /users/{id}), never the raw URL,
@@ -90,6 +96,7 @@ final class RestlyticsMiddleware
             }
 
             $this->tracer->finishServerSpan();
+            $this->logs?->flush();
         } catch (\Throwable) {
             // Never let telemetry break the host app. Best-effort cleanup of state.
             try {

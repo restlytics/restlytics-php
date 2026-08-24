@@ -62,7 +62,7 @@ final class Payload
     /**
      * @return list<array{key: string, value: array{stringValue: string}}>
      */
-    private static function resourceAttributes(string $serviceName, string $environment): array
+    public static function resourceAttributes(string $serviceName, string $environment): array
     {
         return [
             self::stringAttr('service.name', $serviceName),

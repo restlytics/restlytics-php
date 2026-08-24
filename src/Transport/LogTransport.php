@@ -19,10 +19,20 @@ final class LogTransport implements Transport
     public function __construct(
         /** Callback that performs the actual log write: fn(string $json): void */
         private $writer,
-    ) {
-    }
+    ) {}
 
     public function send(array $payload): void
+    {
+        $this->write($payload);
+    }
+
+    public function sendLogs(array $payload): void
+    {
+        $this->write($payload);
+    }
+
+    /** @param array<string, mixed> $payload */
+    private function write(array $payload): void
     {
         try {
             $json = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT);

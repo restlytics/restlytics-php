@@ -35,4 +35,25 @@ final class PreviewTransportTest extends TestCase
         self::assertStringNotContainsString('do-not-export', $encoded);
         self::assertStringContainsString('REDACTED', $output[0]);
     }
+
+    public function test_reports_log_batches_without_networking(): void
+    {
+        $transport = new PreviewTransport(1.0);
+        $transport->sendLogs([
+            'resourceLogs' => [[
+                'scopeLogs' => [[
+                    'logRecords' => [[
+                        'timeUnixNano' => '1',
+                        'severityNumber' => 13,
+                        'body' => ['stringValue' => '[REDACTED]'],
+                    ]],
+                ]],
+            ]],
+        ]);
+
+        self::assertSame('logs', $transport->reports[0]['signal']);
+        self::assertSame(1, $transport->reports[0]['logRecordCount']);
+        self::assertSame(0, $transport->reports[0]['spanCount']);
+        self::assertFalse($transport->reports[0]['networkRequestMade']);
+    }
 }

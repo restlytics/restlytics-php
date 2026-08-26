@@ -10,9 +10,10 @@ use Restlytics\Laravel\Support\Intervals;
 use Restlytics\Laravel\Transport\Transport;
 
 /**
- * Per-request tracer: holds the active trace id, the root SERVER span, and the
- * in-request span buffer. Owns the sampling decision and, on finish, computes the
- * self-time rollups and flushes the OTLP batch through the transport.
+ * Per-unit-of-work tracer: holds the active trace id, the root span (HTTP SERVER
+ * or background JOB/COMMAND/SCHEDULE), and the in-work span buffer. Owns the
+ * sampling decision and, on finish, computes the self-time rollups and flushes
+ * the OTLP batch through the transport.
  *
  * Octane note: this is registered as a singleton, so the SAME instance is reused
  * across requests in a long-lived worker. `reset()` MUST be called at the start
@@ -26,17 +27,21 @@ use Restlytics\Laravel\Transport\Transport;
 final class Tracer
 {
     private bool $enabled = false;
+
     private bool $sampled = false;
 
     private string $traceId = '';
+
     private ?string $rootParentSpanId = null;
+
     private ?Span $rootSpan = null;
 
-    /** @var list<Span> child spans (db/http/cache/...) buffered for this request */
+    /** @var list<Span> child spans (db/http/cache/queue/...) buffered for this unit of work */
     private array $spans = [];
 
     /** Wall-clock epoch nanoseconds captured at the anchor point. */
     private int $wallAnchorNs = 0;
+
     /** Monotonic reading (hrtime) captured at the same anchor point. */
     private int $monoAnchorNs = 0;
 
@@ -54,8 +59,8 @@ final class Tracer
     }
 
     /**
-     * Reset all per-request state. Called at request start (middleware handle and
-     * Octane request-received hook) so a reused singleton never leaks across requests.
+     * Reset all per-work state. Called at request/job start so a reused singleton
+     * never leaks across units of work.
      */
     public function reset(): void
     {
@@ -75,6 +80,12 @@ final class Tracer
         return $this->enabled && $this->sampled;
     }
 
+    /** True when a root span is already open (HTTP or background). */
+    public function hasActiveRoot(): bool
+    {
+        return $this->rootSpan !== null;
+    }
+
     public function traceId(): string
     {
         return $this->traceId;
@@ -86,7 +97,7 @@ final class Tracer
     }
 
     /**
-     * Open the root SERVER span at request start.
+     * Open the root SERVER span at HTTP request start.
      *
      * Continues an incoming W3C traceparent if present (distributed tracing),
      * otherwise mints a fresh trace id. The sampling decision is HEAD-BASED and
@@ -95,10 +106,29 @@ final class Tracer
      */
     public function startServerSpan(string $name, ?string $traceparent = null): void
     {
+        $this->startRootSpan($name, Span::KIND_SERVER, $traceparent);
+    }
+
+    /**
+     * Open a unit-of-work root (HTTP SERVER, job CONSUMER, command/schedule SERVER).
+     *
+     * @param  array{traceId?: string, parentSpanId?: string, sampled?: bool}|null  $carrier
+     *        Parsed queue/HTTP carrier. When set, takes precedence over $traceparent.
+     */
+    public function startRootSpan(
+        string $name,
+        int $kind,
+        ?string $traceparent = null,
+        ?array $carrier = null,
+    ): void {
         $this->reset();
         $this->enabled = true;
 
-        $incoming = Ids::parseTraceparent($traceparent);
+        $incoming = $carrier;
+        if ($incoming === null) {
+            $incoming = Ids::parseTraceparent($traceparent);
+        }
+
         if ($incoming !== null) {
             $this->traceId = $incoming['traceId'];
             $this->rootParentSpanId = $incoming['parentSpanId'];
@@ -126,7 +156,7 @@ final class Tracer
             spanId: Ids::spanId(),
             parentSpanId: $this->rootParentSpanId,
             name: $name,
-            kind: Span::KIND_SERVER,
+            kind: $kind,
             startUnixNano: $this->nowNs(),
             endUnixNano: $this->nowNs(),
         );
@@ -174,14 +204,19 @@ final class Tracer
     }
 
     /**
-     * Close the root span, compute self-time rollups, and flush the batch.
-     *
-     * Self-time = interval-union of child spans per category (db/http/cache), and
-     * app = root duration − union(ALL children). We attach these to the root SERVER
-     * span as restlytics.self_ns.* so the dashboard's time breakdown is correct even
-     * when children overlap.
+     * Close the HTTP root span, compute self-time rollups, and flush the batch.
      */
     public function finishServerSpan(): void
+    {
+        $this->finishRootSpan('app');
+    }
+
+    /**
+     * Close the active root, stamp category + optional attrs, attach self-time, flush.
+     *
+     * @param  callable(Span): void|null  $stamp
+     */
+    public function finishRootSpan(string $category, ?callable $stamp = null): void
     {
         if (! $this->isSampled() || $this->rootSpan === null) {
             $this->reset();
@@ -193,7 +228,10 @@ final class Tracer
 
         $this->attachSelfTime();
         $this->rootSpan->setInt('restlytics.db_query_count', $this->dbQueryCount);
-        $this->rootSpan->setString('restlytics.category', 'app');
+        $this->rootSpan->setString('restlytics.category', $category);
+        if ($stamp !== null) {
+            $stamp($this->rootSpan);
+        }
 
         $this->flush();
         $this->reset();
@@ -228,7 +266,7 @@ final class Tracer
     }
 
     /**
-     * Compute and attach restlytics.self_ns.{db,http,cache,app} to the root span.
+     * Compute and attach restlytics.self_ns.{db,http,cache,queue,app} to the root span.
      */
     private function attachSelfTime(): void
     {
@@ -241,7 +279,7 @@ final class Tracer
         $rootDur = $rootSpan->durationNs();
 
         /** @var array<string, list<array{0:int,1:int}>> $byCat */
-        $byCat = ['db' => [], 'http' => [], 'cache' => [], 'app' => []];
+        $byCat = ['db' => [], 'http' => [], 'cache' => [], 'queue' => [], 'app' => []];
         /** @var list<array{0:int,1:int}> $all */
         $all = [];
 
@@ -261,13 +299,15 @@ final class Tracer
         $selfDb = Intervals::unionLength($byCat['db']);
         $selfHttp = Intervals::unionLength($byCat['http']);
         $selfCache = Intervals::unionLength($byCat['cache']);
+        $selfQueue = Intervals::unionLength($byCat['queue']);
         // app self-time = explicit app-category child time + the root's own
-        // exclusive (uncovered) time. Mirrors the ingestion service's computation.
+        // exclusive (uncovered) time. Mirrors packages/core computeSelfTime.
         $selfApp = Intervals::unionLength($byCat['app']) + max(0, $rootDur - Intervals::unionLength($all));
 
         $rootSpan->setInt('restlytics.self_ns.db', $selfDb);
         $rootSpan->setInt('restlytics.self_ns.http', $selfHttp);
         $rootSpan->setInt('restlytics.self_ns.cache', $selfCache);
+        $rootSpan->setInt('restlytics.self_ns.queue', $selfQueue);
         $rootSpan->setInt('restlytics.self_ns.app', $selfApp);
     }
 
@@ -277,14 +317,9 @@ final class Tracer
      */
     private function categoryOf(Span $span): string
     {
-        $otlp = $span->toOtlpArray();
-        foreach ($otlp['attributes'] ?? [] as $kv) {
-            if (($kv['key'] ?? null) === 'restlytics.category') {
-                $cat = $kv['value']['stringValue'] ?? null;
-                if (\in_array($cat, ['db', 'http', 'cache', 'app'], true)) {
-                    return $cat;
-                }
-            }
+        $cat = $span->stringAttribute('restlytics.category');
+        if (\in_array($cat, ['db', 'http', 'cache', 'queue', 'app'], true)) {
+            return $cat;
         }
 
         return 'app';

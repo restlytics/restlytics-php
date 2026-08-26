@@ -79,4 +79,42 @@ final class Ids
     {
         return sprintf('00-%s-%s-%02x', $traceId, $spanId, $sampled ? 1 : 0);
     }
+
+    /**
+     * Inject the restlytics queue carrier into a Laravel job payload (SPEC §11.7.4).
+     * Mutates $payload in place; never throws.
+     *
+     * @param  array<string, mixed>  $payload
+     */
+    public static function injectCarrier(array &$payload, string $traceId, string $spanId, bool $sampled): void
+    {
+        try {
+            $payload['__restlytics'] = [
+                'traceparent' => self::traceparent($traceId, $spanId, $sampled),
+            ];
+        } catch (\Throwable) {
+            // Carrier injection must never break enqueue.
+        }
+    }
+
+    /**
+     * Extract a queue carrier from a job payload. Missing/malformed → null (fresh trace).
+     *
+     * @param  array<string, mixed>  $payload
+     * @return array{traceId: string, parentSpanId: string, sampled: bool}|null
+     */
+    public static function extractCarrier(array $payload): ?array
+    {
+        try {
+            $carrier = $payload['__restlytics'] ?? null;
+            if (! is_array($carrier)) {
+                return null;
+            }
+            $header = $carrier['traceparent'] ?? null;
+
+            return is_string($header) ? self::parseTraceparent($header) : null;
+        } catch (\Throwable) {
+            return null;
+        }
+    }
 }

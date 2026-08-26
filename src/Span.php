@@ -20,9 +20,13 @@ use Restlytics\Laravel\Support\Redaction;
 final class Span
 {
     /** OTLP SpanKind enum values we use. */
+    public const KIND_INTERNAL = 1;
+
     public const KIND_SERVER = 2;
 
     public const KIND_CLIENT = 3;
+
+    public const KIND_CONSUMER = 5;
 
     /** OTLP status codes. */
     public const STATUS_UNSET = 0;
@@ -41,6 +45,13 @@ final class Span
      * @var array<string, true>
      */
     private array $intKeys = [];
+
+    /**
+     * Span links (SPEC §11.7) — e.g. job root → enqueue producer span.
+     *
+     * @var list<array{traceId: string, spanId: string, attributes: array<string, string>}>
+     */
+    private array $links = [];
 
     private int $statusCode = self::STATUS_UNSET;
 
@@ -112,6 +123,23 @@ final class Span
         return $this;
     }
 
+    /**
+     * @param  array<string, string>  $attributes
+     */
+    public function addLink(string $traceId, string $spanId, array $attributes = []): self
+    {
+        if ($traceId === '' || $spanId === '' || preg_match('/^0+$/', $traceId) === 1 || preg_match('/^0+$/', $spanId) === 1) {
+            return $this;
+        }
+        $this->links[] = [
+            'traceId' => strtolower($traceId),
+            'spanId' => strtolower($spanId),
+            'attributes' => $attributes,
+        ];
+
+        return $this;
+    }
+
     public function setStatus(int $code, ?string $message = null): self
     {
         $this->statusCode = $code;
@@ -123,6 +151,14 @@ final class Span
     public function statusCode(): int
     {
         return $this->statusCode;
+    }
+
+    /** Read a string attribute without serializing the whole span. */
+    public function stringAttribute(string $key): ?string
+    {
+        $value = $this->attributes[$key] ?? null;
+
+        return is_string($value) ? $value : null;
     }
 
     /** Duration in nanoseconds (clamped non-negative against clock skew). */
@@ -155,6 +191,24 @@ final class Span
 
         if ($this->attributes !== []) {
             $span['attributes'] = $this->serializeAttributes();
+        }
+
+        if ($this->links !== []) {
+            $span['links'] = array_map(static function (array $link): array {
+                $out = [
+                    'traceId' => $link['traceId'],
+                    'spanId' => $link['spanId'],
+                ];
+                if ($link['attributes'] !== []) {
+                    $attrs = [];
+                    foreach ($link['attributes'] as $key => $value) {
+                        $attrs[] = ['key' => $key, 'value' => ['stringValue' => $value]];
+                    }
+                    $out['attributes'] = $attrs;
+                }
+
+                return $out;
+            }, $this->links);
         }
 
         // Only attach status when it carries signal (OK/ERROR); UNSET is the default.

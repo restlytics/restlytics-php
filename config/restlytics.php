@@ -83,6 +83,7 @@ return [
         'db' => (bool) env('RESTLYTICS_INSTRUMENT_DB', true),
         'http' => (bool) env('RESTLYTICS_INSTRUMENT_HTTP', true),
         'cache' => (bool) env('RESTLYTICS_INSTRUMENT_CACHE', true),
+        'jobs' => (bool) env('RESTLYTICS_JOBS', true),
     ],
 
     /*

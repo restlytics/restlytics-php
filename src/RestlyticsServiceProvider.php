@@ -51,6 +51,10 @@ final class RestlyticsServiceProvider extends ServiceProvider
                 maxSpans: (int) $config->get('restlytics.max_spans', 2000),
             );
         });
+
+        $this->app->singleton(Work::class, static function ($app): Work {
+            return new Work($app->make(Tracer::class));
+        });
     }
 
     public function boot(): void
@@ -69,6 +73,7 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $this->registerDatabaseListener();
         $this->registerHttpListener();
         $this->registerCacheListener();
+        $this->registerBackgroundWork();
         $this->registerOctaneResetHooks();
     }
 
@@ -252,6 +257,22 @@ final class RestlyticsServiceProvider extends ServiceProvider
             $span?->setString('restlytics.category', 'cache');
         } catch (\Throwable) {
             // best-effort
+        }
+    }
+
+    private function registerBackgroundWork(): void
+    {
+        if (! (bool) $this->app['config']->get('restlytics.instruments.jobs', true)) {
+            return;
+        }
+
+        try {
+            (new BackgroundWorkInstrumentation(
+                $this->app->make(Tracer::class),
+                $this->app->make(Work::class),
+            ))->register();
+        } catch (\Throwable) {
+            // Soft: queue/console packages may be absent.
         }
     }
 

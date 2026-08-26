@@ -1,7 +1,7 @@
 {
     "name": "restlytics/laravel",
-    "description": "restlytics Laravel SDK — zero-config request, DB, HTTP and cache tracing shipped to restlytics in OTLP/JSON. Pure PHP, fire-and-forget, no PECL extension required.",
-    "keywords": ["laravel", "observability", "tracing", "otlp", "apm", "performance", "n-plus-one", "restlytics"],
+    "description": "restlytics Laravel SDK — zero-config HTTP, DB, HTTP-client, cache, and background job/command/schedule tracing shipped to restlytics in OTLP/JSON. Pure PHP, fire-and-forget, no PECL extension required.",
+    "keywords": ["laravel", "observability", "tracing", "otlp", "apm", "performance", "n-plus-one", "queue", "jobs", "restlytics"],
     "homepage": "https://github.com/restlytics/restlytics-laravel",
     "license": "MIT",
     "authors": [

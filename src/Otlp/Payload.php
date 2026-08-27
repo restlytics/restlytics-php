@@ -26,7 +26,7 @@ final class Payload
 
     public const SDK_LANGUAGE = 'php';
 
-    public const SDK_VERSION = '0.1.0';
+    public const SDK_VERSION = '0.5.0';
 
     /**
      * @param  list<Span>  $spans

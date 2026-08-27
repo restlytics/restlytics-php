@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel\Transport;
 
+use Restlytics\Laravel\Exporter;
+
 /**
  * Writes the OTLP payload to the Laravel log instead of the network. Handy for
  * local development and debugging the wire shape ("what would we send?") without
@@ -14,7 +16,7 @@ namespace Restlytics\Laravel\Transport;
  * Resolves the logger at call-time (not in the constructor) so it stays
  * Octane-safe and doesn't capture a stale container binding.
  */
-final class LogTransport implements Transport
+final class LogTransport implements Exporter, LogsTransport, Transport
 {
     public function __construct(
         /** Callback that performs the actual log write: fn(string $json): void */
@@ -23,10 +25,20 @@ final class LogTransport implements Transport
 
     public function send(array $payload): void
     {
-        $this->write($payload);
+        $this->exportTraces($payload);
     }
 
     public function sendLogs(array $payload): void
+    {
+        $this->exportLogs($payload);
+    }
+
+    public function exportTraces(array $payload): void
+    {
+        $this->write($payload);
+    }
+
+    public function exportLogs(array $payload): void
     {
         $this->write($payload);
     }

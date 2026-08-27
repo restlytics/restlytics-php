@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel\Transport;
 
+use Restlytics\Laravel\Exporter;
+
 /**
  * Default transport: gzip the JSON body and POST it with cURL.
  *
@@ -21,7 +23,7 @@ namespace Restlytics\Laravel\Transport;
  *   Content-Encoding: gzip
  *   body = gzip(json)
  */
-final class CurlTransport implements Transport
+final class CurlTransport implements Exporter, LogsTransport, Transport
 {
     private int $acceptedBatches = 0;
 
@@ -45,10 +47,20 @@ final class CurlTransport implements Transport
 
     public function send(array $payload): void
     {
-        $this->sendTo('/v1/traces', $payload);
+        $this->exportTraces($payload);
     }
 
     public function sendLogs(array $payload): void
+    {
+        $this->exportLogs($payload);
+    }
+
+    public function exportTraces(array $payload): void
+    {
+        $this->sendTo('/v1/traces', $payload);
+    }
+
+    public function exportLogs(array $payload): void
     {
         $this->sendTo('/v1/logs', $payload);
     }

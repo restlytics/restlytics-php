@@ -162,6 +162,58 @@ if ($transport instanceof \Restlytics\Laravel\Transport\CurlTransport) {
 }
 ```
 
+### Custom exporters
+
+Use the provider-neutral `Exporter` contract to route the same production-shaped,
+source-redacted OTLP payloads to your own collector, queue, or observability
+provider. Register it as a singleton in your application's service provider:
+
+```php
+use Illuminate\Support\ServiceProvider;
+use Restlytics\Laravel\Exporter;
+
+final class CompanyTelemetryExporter implements Exporter
+{
+    public function exportTraces(array $payload): void
+    {
+        // Deliver OTLP ExportTraceServiceRequest using your own bounded client.
+    }
+
+    public function exportLogs(array $payload): void
+    {
+        // Deliver OTLP ExportLogsServiceRequest using your own bounded client.
+    }
+}
+
+final class AppServiceProvider extends ServiceProvider
+{
+    public function register(): void
+    {
+        $this->app->singleton(Exporter::class, CompanyTelemetryExporter::class);
+    }
+}
+```
+
+The container resolves the exporter once and can inject its normal constructor
+dependencies. As an alternative, `restlytics.transport` accepts an exporter class
+name or bound service id. An explicit `Exporter` binding takes precedence over that
+setting; the built-in `curl`, `preview`, `log`, and `null` drivers are unchanged.
+If a selected custom exporter cannot be constructed, delivery fails closed for
+that process instead of falling back to a different destination.
+
+Both methods receive one associative-array OTLP request body at the existing
+request/job/command lifecycle flush point. The callback never receives the
+Restlytics project key, authorization headers, ingest URL, or tenant-routing
+metadata. Source redaction and buffer caps have already been applied. Exporter
+exceptions and re-entrant calls are swallowed without retrying, so they cannot
+replace a host response or operation result. Because PHP cannot safely pre-empt
+arbitrary synchronous customer code, custom network clients must set their own
+short connect and request timeouts.
+
+The released trace-only `Transport` interface remains supported for compatibility.
+Existing implementations keep receiving traces through `send()`; implement
+`Exporter` to receive native logs as well.
+
 ---
 
 ## Local development

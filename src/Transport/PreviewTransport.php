@@ -4,11 +4,13 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel\Transport;
 
+use Restlytics\Laravel\Exporter;
+
 /**
  * Emits a structured production-payload preview locally and never opens a socket.
  * Select with RESTLYTICS_TRANSPORT=preview before connecting production data.
  */
-final class PreviewTransport implements Transport
+final class PreviewTransport implements Exporter, LogsTransport, Transport
 {
     /** @var list<array<string, mixed>> */
     public array $reports = [];
@@ -21,10 +23,20 @@ final class PreviewTransport implements Transport
 
     public function send(array $payload): void
     {
-        $this->report($payload, 'traces');
+        $this->exportTraces($payload);
     }
 
     public function sendLogs(array $payload): void
+    {
+        $this->exportLogs($payload);
+    }
+
+    public function exportTraces(array $payload): void
+    {
+        $this->report($payload, 'traces');
+    }
+
+    public function exportLogs(array $payload): void
     {
         $this->report($payload, 'logs');
     }

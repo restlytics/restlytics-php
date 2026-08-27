@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel\Transport;
 
+use Restlytics\Laravel\Exporter;
+
 /**
  * No-op transport. Useful in tests, local dev, and CI where you don't want to
  * (or can't) reach the ingestion service. Optionally records the last payload so
@@ -11,7 +13,7 @@ namespace Restlytics\Laravel\Transport;
  *
  * Select with RESTLYTICS_TRANSPORT=null.
  */
-final class NullTransport implements Transport
+final class NullTransport implements Exporter, LogsTransport, Transport
 {
     /** @var array<string, mixed>|null */
     public ?array $lastPayload = null;
@@ -27,11 +29,21 @@ final class NullTransport implements Transport
 
     public function send(array $payload): void
     {
+        $this->exportTraces($payload);
+    }
+
+    public function exportTraces(array $payload): void
+    {
         $this->lastPayload = $payload;
         $this->sent[] = $payload;
     }
 
     public function sendLogs(array $payload): void
+    {
+        $this->exportLogs($payload);
+    }
+
+    public function exportLogs(array $payload): void
     {
         $this->lastLogPayload = $payload;
         $this->sentLogs[] = $payload;

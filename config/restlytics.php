@@ -49,6 +49,9 @@ return [
     | preview — structured local report; never networks and needs no ingest key.
     | log   — write the OTLP payload to the Laravel log (local debugging).
     | null  — no-op (tests / disabling delivery while keeping instrumentation).
+    | You may also provide a container service id or Exporter class name. The
+    | recommended Laravel integration is to bind Restlytics\Laravel\Exporter in
+    | your application's register() method and leave this value unchanged.
     */
     'transport' => env('RESTLYTICS_TRANSPORT', 'curl'),
 

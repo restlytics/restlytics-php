@@ -16,6 +16,7 @@ use Restlytics\Laravel\Middleware\RestlyticsMiddleware;
 use Restlytics\Laravel\Support\Redaction;
 use Restlytics\Laravel\Support\Sql;
 use Restlytics\Laravel\Transport\CurlTransport;
+use Restlytics\Laravel\Transport\ExporterTransport;
 use Restlytics\Laravel\Transport\LogTransport;
 use Restlytics\Laravel\Transport\NullTransport;
 use Restlytics\Laravel\Transport\PreviewTransport;
@@ -35,10 +36,14 @@ final class RestlyticsServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/restlytics.php', 'restlytics');
 
-        // Transport is a singleton; chosen by config('restlytics.transport').
-        $this->app->singleton(Transport::class, function ($app): Transport {
-            return $this->makeTransport($app);
-        });
+        // Respect a transport registered by the host before package discovery.
+        // New integrations should bind Exporter instead; legacy Transport
+        // bindings remain a supported trace-only compatibility path.
+        if (! $this->app->bound(Transport::class)) {
+            $this->app->singleton(Transport::class, function ($app): Transport {
+                return $this->makeTransport($app);
+            });
+        }
 
         // Tracer is a singleton (reused across Octane requests) and reset per request.
         $this->app->singleton(Tracer::class, function ($app): Tracer {
@@ -95,8 +100,32 @@ final class RestlyticsServiceProvider extends ServiceProvider
 
     private function enabled(): bool
     {
-        return (string) $this->app['config']->get('restlytics.key', '') !== ''
-            || (string) $this->app['config']->get('restlytics.transport', '') === 'preview';
+        if ((string) $this->app['config']->get('restlytics.key', '') !== '') {
+            return true;
+        }
+
+        $driver = (string) $this->app['config']->get('restlytics.transport', 'curl');
+        if ($driver === 'preview' || $this->app->bound(Exporter::class)) {
+            return true;
+        }
+
+        if (! in_array($driver, ['curl', 'null', 'none', 'log'], true)
+            && ($this->app->bound($driver) || class_exists($driver))) {
+            return true;
+        }
+
+        // A customer may have registered the legacy interface directly. Resolve
+        // defensively so an invalid binding disables telemetry instead of booting
+        // the host application with an exception.
+        try {
+            $transport = $this->app->make(Transport::class);
+
+            return ! $transport instanceof CurlTransport
+                && ! $transport instanceof NullTransport
+                && ! $transport instanceof LogTransport;
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /**
@@ -408,6 +437,16 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $config = $app['config'];
         $driver = (string) $config->get('restlytics.transport', 'curl');
 
+        if ($app->bound(Exporter::class)) {
+            try {
+                return new ExporterTransport($app->make(Exporter::class));
+            } catch (\Throwable) {
+                $this->reportTransportConfigurationError($app);
+
+                return new NullTransport;
+            }
+        }
+
         return match ($driver) {
             'null', 'none' => new NullTransport,
             'log' => new LogTransport(static function (string $json) use ($app): void {
@@ -424,18 +463,62 @@ final class RestlyticsServiceProvider extends ServiceProvider
                     }
                 },
             ),
-            default => new CurlTransport(
-                ingestUrl: (string) $config->get('restlytics.ingest_url', ''),
-                key: (string) $config->get('restlytics.key', ''),
-                timeoutMs: (int) $config->get('restlytics.timeout_ms', 2000),
-                onError: static function (string $message) use ($app): void {
-                    // Surface transport errors at debug level only — never noisy,
-                    // never thrown.
-                    if ($app->bound('log')) {
-                        $app->make('log')->debug($message);
-                    }
-                },
-            ),
+            'curl' => $this->makeCurlTransport($app),
+            default => $this->makeCustomTransport($app, $driver),
         };
+    }
+
+    private function makeCustomTransport(Application $app, string $service): Transport
+    {
+        if ($service === '' || (! $app->bound($service) && ! class_exists($service))) {
+            return $this->makeCurlTransport($app);
+        }
+
+        try {
+            $candidate = $app->make($service);
+            if ($candidate instanceof Exporter) {
+                return new ExporterTransport($candidate);
+            }
+            if ($candidate instanceof Transport) {
+                return $candidate;
+            }
+        } catch (\Throwable) {
+            // Fall through to the safe built-in transport.
+        }
+
+        $this->reportTransportConfigurationError($app);
+
+        return new NullTransport;
+    }
+
+    private function makeCurlTransport(Application $app): CurlTransport
+    {
+        $config = $app['config'];
+
+        return new CurlTransport(
+            ingestUrl: (string) $config->get('restlytics.ingest_url', ''),
+            key: (string) $config->get('restlytics.key', ''),
+            timeoutMs: (int) $config->get('restlytics.timeout_ms', 2000),
+            onError: static function (string $message) use ($app): void {
+                // Surface transport errors at debug level only — never noisy,
+                // never thrown.
+                if ($app->bound('log')) {
+                    $app->make('log')->debug($message);
+                }
+            },
+        );
+    }
+
+    private function reportTransportConfigurationError(Application $app): void
+    {
+        try {
+            if ($app->bound('log')) {
+                // Deliberately omit the class name and exception text: customer
+                // configuration can contain credentials or tenant identifiers.
+                $app->make('log')->debug('restlytics: custom exporter unavailable; telemetry delivery disabled');
+            }
+        } catch (\Throwable) {
+            // Diagnostics must never affect host boot.
+        }
     }
 }

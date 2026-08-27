@@ -6,6 +6,7 @@ namespace Restlytics\Laravel;
 
 use Restlytics\Laravel\Otlp\LogPayload;
 use Restlytics\Laravel\Support\Redaction;
+use Restlytics\Laravel\Transport\LogsTransport;
 use Restlytics\Laravel\Transport\Transport;
 
 /** Bounded, opt-in application-log capture with source redaction and trace correlation. */
@@ -103,11 +104,23 @@ final class LogBuffer
         $this->records = [];
         $this->flushing = true;
         try {
-            $this->transport->sendLogs(LogPayload::build(
+            $payload = LogPayload::build(
                 $this->serviceName,
                 $this->environment,
                 $records,
-            ));
+            );
+            if ($this->transport instanceof LogsTransport) {
+                $this->transport->sendLogs($payload);
+
+                return;
+            }
+
+            // Source-main compatibility for transports that adopted sendLogs()
+            // before the explicit Exporter contract existed.
+            $sendLogs = [$this->transport, 'sendLogs'];
+            if (is_callable($sendLogs)) {
+                $sendLogs($payload);
+            }
         } catch (\Throwable) {
             // Transport failures are intentionally swallowed and never retried inline.
         } finally {

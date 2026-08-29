@@ -355,7 +355,11 @@ final class RestlyticsServiceProvider extends ServiceProvider
             if ($tracer->rootCategory() === 'schedule') {
                 return;
             }
-            $work->startCommand((string) ($event->command ?? 'unnamed-command'));
+            $name = (string) ($event->command ?? 'unnamed-command');
+            if (self::isSuppressedCommand($name)) {
+                return;
+            }
+            $work->startCommand($name);
         });
         Event::listen('Illuminate\\Console\\Events\\CommandFinished', static function (object $event) use ($work, $tracer, $logs): void {
             if ($tracer->rootCategory() !== 'command') {
@@ -387,6 +391,48 @@ final class RestlyticsServiceProvider extends ServiceProvider
     }
 
     /** Attach a source-redacting Monolog handler to Laravel's default channel. */
+    /**
+     * Artisan commands that must never open a command root.
+     *
+     * The first group are containers for other work units: they run for the life of
+     * the process and emit their own job/schedule roots from within. Opening a command
+     * root for them produces a span covering the whole process lifetime whenever the
+     * wrapper does no inner work — a plain `schedule:run` cron emits 1,440 such spans a
+     * day, billed by byte volume and polluting command analytics. The second group are
+     * trivial introspection commands that carry no signal worth exporting.
+     */
+    private const SUPPRESSED_COMMANDS = [
+        // Containers for other work units.
+        'queue:work',
+        'queue:listen',
+        'queue:retry',
+        'horizon',
+        'horizon:work',
+        'horizon:supervisor',
+        'schedule:run',
+        'schedule:work',
+        'schedule:finish',
+        // Introspection noise.
+        'inspire',
+        'about',
+        'list',
+        'help',
+    ];
+
+    private static function isSuppressedCommand(string $name): bool
+    {
+        $name = strtolower(trim($name));
+        foreach (self::SUPPRESSED_COMMANDS as $suppressed) {
+            if ($name === $suppressed
+                || str_starts_with($name, $suppressed.':')
+                || str_starts_with($name, $suppressed.' ')) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private function registerLogListener(): void
     {
         if (! (bool) $this->app['config']->get('restlytics.logs', false) || ! class_exists(RestlyticsLogHandler::class)) {

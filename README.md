@@ -13,6 +13,16 @@ Zero-config performance + error tracing for Laravel, shipped to [restlytics](htt
 
 ## Install
 
+> [!IMPORTANT]
+> **Not yet published to Packagist.** `restlytics/laravel` returns 404 today — publication is tracked in
+> [restlytics/app#232](https://github.com/restlytics/app/issues/232). Until it lands, install
+> directly from this repository:
+>
+> ```bash
+> composer config repositories.restlytics vcs https://github.com/restlytics/restlytics-php
+> composer require restlytics/laravel:dev-main
+> ```
+
 ```bash
 composer require restlytics/laravel
 ```

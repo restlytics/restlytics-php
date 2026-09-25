@@ -129,8 +129,6 @@ final class CurlTransport implements Exporter, LogsTransport, Transport
             } else {
                 $this->deliveredBatches++;
             }
-
-            curl_close($ch);
         } catch (\Throwable $e) {
             // Absolute backstop — nothing here may ever propagate.
             $this->reportError('restlytics: transport exception: '.$e->getMessage());

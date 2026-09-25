@@ -92,14 +92,6 @@ final class Redaction
         return $scheme.$host.$port.$path.$query;
     }
 
-    /** Exception text is intentionally omitted; Restlytics is not a crash tracker. */
-    public static function exceptionMessage(?string $message): ?string
-    {
-        unset($message);
-
-        return null;
-    }
-
     /**
      * Scrub common credential and personal-data forms from an application log
      * message before it enters the SDK buffer. This is deliberately applied at

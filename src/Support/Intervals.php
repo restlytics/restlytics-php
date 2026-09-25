@@ -21,7 +21,7 @@ final class Intervals
     /**
      * Total wall-clock length covered by the union of [start, end] intervals.
      *
-     * @param list<array{0:int,1:int}> $intervals pairs of [startNs, endNs]
+     * @param  list<array{0:int,1:int}>  $intervals  pairs of [startNs, endNs]
      */
     public static function unionLength(array $intervals): int
     {

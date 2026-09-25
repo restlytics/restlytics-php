@@ -72,7 +72,8 @@ php artisan vendor:publish --tag=restlytics-config
 2. **DB spans** — `DB::listen()` turns each `QueryExecuted` into a `CLIENT` span. The statement is
    normalized to a literal-free template (`SELECT * FROM users WHERE id = ?`) used both as the
    N+1 grouping key and to keep PII off the wire. We record the binding **count**, never values.
-3. **Outbound HTTP spans** — a global Laravel HTTP-client middleware captures method, host,
+3. **Outbound HTTP spans** — a global Laravel HTTP-client middleware injects the CLIENT
+   span's W3C `traceparent` (including unsampled `flags=00`) and captures method, host,
    redacted `url.full`, status, and timing for each call.
 4. **Cache spans** — best-effort hit/miss markers via cache events.
 5. **Self-time** — child spans are interval-unioned per category (db / http / cache) so overlapping

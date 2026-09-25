@@ -112,6 +112,25 @@ final class Tracer
         return $this->isSampled() ? 1 : 0;
     }
 
+    /**
+     * Mint the CLIENT SpanContext for outbound propagation.
+     *
+     * @return array{traceparent:string,spanId:string}|null
+     */
+    public function outboundContext(): ?array
+    {
+        if (! $this->isActive()) {
+            return null;
+        }
+
+        $spanId = Ids::spanId();
+
+        return [
+            'traceparent' => Ids::traceparent($this->traceId, $spanId, $this->sampled),
+            'spanId' => $spanId,
+        ];
+    }
+
     public function rootSpanId(): ?string
     {
         return $this->isActive() ? $this->correlationSpanId : null;

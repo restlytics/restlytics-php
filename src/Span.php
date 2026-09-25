@@ -46,8 +46,6 @@ final class Span
 
     private int $statusCode = self::STATUS_UNSET;
 
-    private ?string $statusMessage = null;
-
     /** @var list<array{traceId:string,spanId:string,attributes:list<array{key:string,value:array<string,string>}>}> */
     private array $links = [];
 
@@ -120,7 +118,9 @@ final class Span
     public function setStatus(int $code, ?string $message = null): self
     {
         $this->statusCode = $code;
-        $this->statusMessage = Redaction::exceptionMessage($message);
+        // Status text is intentionally discarded: it can contain credentials or
+        // personal data, and Restlytics is not a crash-reporting product.
+        unset($message);
 
         return $this;
     }
@@ -182,11 +182,7 @@ final class Span
 
         // Only attach status when it carries signal (OK/ERROR); UNSET is the default.
         if ($this->statusCode !== self::STATUS_UNSET) {
-            $status = ['code' => $this->statusCode];
-            if ($this->statusMessage !== null && $this->statusMessage !== '') {
-                $status['message'] = $this->statusMessage;
-            }
-            $span['status'] = $status;
+            $span['status'] = ['code' => $this->statusCode];
         }
 
         return $span;

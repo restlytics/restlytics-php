@@ -14,6 +14,20 @@ permissions:
   contents: read
 
 jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: curl, json, zlib
+          coverage: none
+      - run: composer install --prefer-dist --no-interaction --no-progress
+      - run: composer lint
+      - run: composer analyse
+
   test:
     name: Test (PHP ${{ matrix.php }})
     runs-on: ubuntu-latest

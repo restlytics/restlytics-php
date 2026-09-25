@@ -18,6 +18,7 @@ $record = [
     'path' => parse_url((string) ($_SERVER['REQUEST_URI'] ?? ''), PHP_URL_PATH),
     'key' => (string) ($_SERVER['HTTP_X_RESTLYTICS_KEY'] ?? ''),
     'encoding' => (string) ($_SERVER['HTTP_CONTENT_ENCODING'] ?? ''),
+    'traceparent' => (string) ($_SERVER['HTTP_TRACEPARENT'] ?? ''),
     'body' => base64_encode((string) file_get_contents('php://input')),
 ];
 file_put_contents($capturePath, json_encode($record, JSON_THROW_ON_ERROR).PHP_EOL, FILE_APPEND | LOCK_EX);

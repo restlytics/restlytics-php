@@ -47,7 +47,7 @@
         "test": "phpunit",
         "lint": "pint --test",
         "fmt": "pint",
-        "analyse": "phpstan analyse"
+        "analyse": "phpstan analyse --configuration=phpstan.neon --no-progress"
     },
     "config": {
         "sort-packages": true

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Restlytics\Laravel;
 
+use GuzzleHttp\Promise\Create;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Contracts\Http\Kernel as HttpKernel;
 use Illuminate\Database\Events\QueryExecuted;
@@ -208,9 +209,9 @@ final class RestlyticsServiceProvider extends ServiceProvider
     }
 
     /**
-     * Outbound HTTP child spans via the Laravel HTTP client's global Guzzle
-     * middleware (`on_stats`). Client events lack parent correlation, so these are
-     * best-effort children of whatever root span is active when the call returns.
+     * Outbound HTTP propagation + child spans via one global Guzzle middleware.
+     * The per-request closure keeps timing and the minted CLIENT span id together
+     * across the promise, so the downstream parent exactly matches the local span.
      *
      * Redaction: url.full has its query string scrubbed; no headers/bodies sent.
      */
@@ -226,48 +227,85 @@ final class RestlyticsServiceProvider extends ServiceProvider
         $tracer = $this->app->make(Tracer::class);
         $redactKeys = (array) $this->app['config']->get('restlytics.redaction.query_keys', []);
 
-        // globalRequestMiddleware/globalResponseMiddleware exist on Laravel 10.14+.
-        if (! method_exists(Http::class, 'globalResponseMiddleware')) {
+        // Facade methods are forwarded dynamically, so inspect the resolved
+        // factory rather than method_exists(Http::class, ...).
+        $http = Http::getFacadeRoot();
+        if (! is_object($http) || ! method_exists($http, 'globalMiddleware')) {
             return;
         }
 
-        // Use a global response middleware: it sees the final response and, via the
-        // transfer stats, the timing. We compute the span on the way back.
-        Http::globalResponseMiddleware(static function ($response) use ($tracer, $redactKeys) {
-            try {
-                if (! $tracer->isSampled()) {
-                    return $response;
+        $http->globalMiddleware(static function (callable $handler) use ($tracer, $redactKeys) {
+            return static function ($request, array $options) use ($handler, $tracer, $redactKeys) {
+                try {
+                    $context = $tracer->outboundContext();
+                    if ($context === null) {
+                        return $handler($request, $options);
+                    }
+                    $request = $request->withHeader('traceparent', $context['traceparent']);
+                    $startNs = $tracer->nowNs();
+                } catch (\Throwable) {
+                    return $handler($request, $options);
                 }
 
-                $stats = method_exists($response, 'transferStats') ? $response->transferStats() : null;
-                if ($stats === null) {
-                    return $response;
+                $record = static function ($response, bool $failed) use (
+                    $tracer,
+                    $redactKeys,
+                    $request,
+                    $context,
+                    $startNs,
+                ): void {
+                    try {
+                        $uri = $request->getUri();
+                        $host = $uri->getHost();
+                        $span = $tracer->addChildSpan(
+                            'http '.$host,
+                            $startNs,
+                            $tracer->nowNs(),
+                            spanId: $context['spanId'],
+                        );
+                        if ($span === null) {
+                            return;
+                        }
+
+                        $span
+                            ->setString('http.request.method', $request->getMethod())
+                            ->setString('url.full', Redaction::url((string) $uri, $redactKeys))
+                            ->setString('server.address', $host)
+                            ->setString('restlytics.category', 'http');
+                        if ($response !== null && method_exists($response, 'getStatusCode')) {
+                            $status = (int) $response->getStatusCode();
+                            $span->setInt('http.response.status_code', $status);
+                            $failed = $failed || $status >= 500;
+                        }
+                        if ($failed) {
+                            $span->setStatus(Span::STATUS_ERROR);
+                        }
+                    } catch (\Throwable) {
+                        // best-effort: recording never changes the HTTP result
+                    }
+                };
+
+                try {
+                    $promise = $handler($request, $options);
+                } catch (\Throwable $error) {
+                    $record(null, true);
+
+                    throw $error;
                 }
 
-                $uri = $stats->getEffectiveUri();
-                $totalSeconds = (float) $stats->getTransferTime();
+                return $promise->then(
+                    static function ($response) use ($record) {
+                        $record($response, false);
 
-                $endNs = $tracer->nowNs();
-                $startNs = $endNs - (int) round($totalSeconds * 1_000_000_000);
+                        return $response;
+                    },
+                    static function ($reason) use ($record) {
+                        $record(null, true);
 
-                $host = $uri->getHost();
-                $span = $tracer->addChildSpan('http '.$host, $startNs, $endNs);
-                if ($span === null) {
-                    return $response;
-                }
-
-                $request = $stats->getRequest();
-                $span
-                    ->setString('http.request.method', $request->getMethod())
-                    ->setString('url.full', Redaction::url((string) $uri, $redactKeys))
-                    ->setString('server.address', $host)
-                    ->setInt('http.response.status_code', $response->getStatusCode())
-                    ->setString('restlytics.category', 'http');
-            } catch (\Throwable) {
-                // best-effort: outbound HTTP instrumentation never breaks the call
-            }
-
-            return $response;
+                        return Create::rejectionFor($reason);
+                    },
+                );
+            };
         });
     }
 

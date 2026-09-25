@@ -51,6 +51,6 @@ final class TracerSamplingTest extends TestCase
 
     private function tracer(float $sampleRate): Tracer
     {
-        return new Tracer(new NullTransport(), 'checkout-api', 'test', $sampleRate);
+        return new Tracer(new NullTransport, 'checkout-api', 'test', $sampleRate);
     }
 }

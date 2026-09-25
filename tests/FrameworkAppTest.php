@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Restlytics\Laravel\Tests;
 
 use Illuminate\Routing\Router;
+use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Orchestra\Testbench\TestCase;
 use Restlytics\Laravel\RestlyticsServiceProvider;
@@ -103,6 +104,45 @@ final class FrameworkAppTest extends TestCase
             return response()->json(['id' => $id]);
         });
         $router->get('/fail/{id}', static fn () => response('unavailable', 503));
+        $router->get('/outbound', function () {
+            Http::get('http://127.0.0.1:'.$this->port.'/downstream?token=secret');
+
+            return response()->json(['ok' => true]);
+        });
+    }
+
+    public function test_outbound_http_propagates_sampled_and_unsampled_trace_contexts(): void
+    {
+        $this->withHeader(
+            'traceparent',
+            '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
+        )->get('/outbound')->assertOk();
+
+        $sampledDownstream = $this->capture(0);
+        $sampledTrace = $this->payload($this->capture(1));
+        $sampledSpans = $sampledTrace['resourceSpans'][0]['scopeSpans'][0]['spans'];
+        self::assertCount(2, $sampledSpans);
+        self::assertSame(
+            explode('-', $sampledDownstream['traceparent'])[2],
+            $sampledSpans[1]['spanId'],
+        );
+        self::assertSame($sampledSpans[0]['spanId'], $sampledSpans[1]['parentSpanId']);
+
+        $this->withHeader(
+            'traceparent',
+            '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00',
+        )->get('/outbound')->assertOk();
+
+        $unsampledDownstream = $this->capture(2);
+
+        self::assertMatchesRegularExpression(
+            '/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-01$/',
+            $sampledDownstream['traceparent'],
+        );
+        self::assertMatchesRegularExpression(
+            '/^00-4bf92f3577b34da6a3ce929d0e0e4736-[0-9a-f]{16}-00$/',
+            $unsampledDownstream['traceparent'],
+        );
     }
 
     public function test_real_laravel_app_emits_tenant_safe_otlp_and_survives_ingest_failure(): void
@@ -168,14 +208,14 @@ final class FrameworkAppTest extends TestCase
         self::fail('timed out starting deployed-compatible ingest server');
     }
 
-    /** @return array{path:string,key:string,encoding:string,body:string} */
+    /** @return array{path:string,key:string,encoding:string,traceparent:string,body:string} */
     private function capture(int $index): array
     {
         $deadline = microtime(true) + 2.0;
         do {
             $lines = file($this->capturePath, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES) ?: [];
             if (isset($lines[$index])) {
-                /** @var array{path:string,key:string,encoding:string,body:string} $capture */
+                /** @var array{path:string,key:string,encoding:string,traceparent:string,body:string} $capture */
                 $capture = json_decode($lines[$index], true, flags: JSON_THROW_ON_ERROR);
 
                 return $capture;
